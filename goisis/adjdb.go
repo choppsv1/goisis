@@ -1,13 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/tlv"
 	"net"
 	"sync"
 )
 
+// ---------------------------------------------------------------
 // AdjDB stores the adjacencies for a given level on a given link.
+// ---------------------------------------------------------------
 type AdjDB struct {
 	level    int
 	lindex   int
@@ -17,8 +20,10 @@ type AdjDB struct {
 	srcidMap map[[clns.SysIDLen]byte]*Adj
 }
 
+// --------------------------------------------------------------------------
 // NewAdjDB creates and initializes a new adjacency database for a given link
 // and level.
+// --------------------------------------------------------------------------
 func NewAdjDB(link Link, level int) *AdjDB {
 	db := new(AdjDB)
 	db.level = level
@@ -29,7 +34,13 @@ func NewAdjDB(link Link, level int) *AdjDB {
 	return db
 }
 
+func (db *AdjDB) String() string {
+	return fmt.Sprintf("AdjDB(%s)", db.link)
+}
+
+// ---------------------------------------------------------------
 // GetAdjSNPA returns an list of SNPA for all non-DOWN adjacencies
+// ---------------------------------------------------------------
 func (db *AdjDB) GetAdjSNPA() []net.HardwareAddr {
 	db.lock.Lock()
 	defer db.lock.Unlock()
@@ -44,7 +55,9 @@ func (db *AdjDB) GetAdjSNPA() []net.HardwareAddr {
 	return alist
 }
 
+// -----------------------------------------------------------
 // HasUpAdj returns true if the DB contains any Up adjacencies
+// -----------------------------------------------------------
 func (db *AdjDB) HasUpAdj() bool {
 	db.lock.Lock()
 	defer db.lock.Unlock()
@@ -57,13 +70,15 @@ func (db *AdjDB) HasUpAdj() bool {
 	return false
 }
 
+// ----------------------------------------------------------------------
 // UpdateAdj creates or refreshes an existing adjacency, the return value
 // indicates if DIS election should be [re]run.
+// ----------------------------------------------------------------------
 func (db *AdjDB) UpdateAdj(payload []byte, tlvs map[tlv.Type][]tlv.Data, src net.HardwareAddr) bool {
 	db.lock.Lock()
 	defer db.lock.Unlock()
 
-	debug.Printf("%s: UpdateAdj for %s", db, src)
+	debug(DbgFAdj, "%s: UpdateAdj for %s", db, src)
 
 	// XXX is there a better way to do 6 byte key values?
 	var snpa [clns.SNPALen]byte
@@ -88,7 +103,10 @@ func (db *AdjDB) UpdateAdj(payload []byte, tlvs map[tlv.Type][]tlv.Data, src net
 	return a.Update(payload, tlvs)
 }
 
-// ExpireAdj removes the adjacency from the DB and triggers DIS election if needed.
+// ------------------------------------------------------------------------
+// ExpireAdj removes the adjacency from the DB and triggers DIS election if
+// needed.
+// ------------------------------------------------------------------------
 func (db *AdjDB) ExpireAdj(a *Adj) {
 	var rundis bool
 

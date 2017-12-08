@@ -2,38 +2,42 @@ package main
 
 import (
 	"fmt"
-	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/raw"
+	"github.com/choppsv1/goisis/tlv"
 	"golang.org/x/net/bpf"
 	"io"
 	"net"
 	"syscall"
 )
 
-//
+// ================================
 // Link is an IS-IS/CLNS interface.
-//
+// ================================
 type Link interface {
 	DISInfoChanged(level int)
-	ProcessPacket(*Frame) error
+	GetOurSNPA() net.HardwareAddr
+	ProcessPacket(*RecvFrame) error
+	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
 }
 
-//
+// --------------------------------------------------------
 // Frame is a type passed by value for handling raw packets
-//
-type Frame struct {
+// --------------------------------------------------------
+type RecvFrame struct {
 	pkt  []byte
 	from syscall.Sockaddr
 	link Link
 }
 
+// ----------------------------------------------------------------
 // LinkCommon collects common functionality from all types of links
+// ----------------------------------------------------------------
 type LinkCommon struct {
 	link   Link
 	intf   *net.Interface
 	sock   raw.IntfSocket
-	inpkt  chan<- *Frame
+	inpkt  chan<- *RecvFrame
 	outpkt chan []byte
 	quit   <-chan bool
 }
@@ -46,54 +50,57 @@ func (common *LinkCommon) String() string {
 func (common *LinkCommon) readPackets() {
 	var err error
 
-	debug.Printf("Starting to read packets on %s\n", common)
+	debug(DbgFPkt, "Starting to read packets on %s\n", common)
 	for {
-		frame := Frame{
+		frame := RecvFrame{
 			link: common.link,
 		}
 		frame.pkt, frame.from, err = common.sock.ReadPacket()
 		if err != nil {
 			if err == io.EOF {
-				debug.Printf("EOF reading from %s, will stop reading from link\n", common)
+				debug(DbgFPkt, "EOF reading from %s, will stop reading from link\n", common)
 				return
 			}
-			debug.Printf("Error reading from link %s: %s\n", common.intf.Name, err)
+			debug(DbgFPkt, "Error reading from link %s: %s\n", common.intf.Name, err)
 			continue
 		}
-		// debug.Printf("Read packet on %s len(%d)\n", common.link, len(frame.pkt))
+		// debug(DbgFPkt, "Read packet on %s len(%d)\n", common.link, len(frame.pkt))
 		// XXX Do some early validation before sending on channel.
 		common.inpkt <- &frame
 	}
 }
 
 // writePackets is a go routine to read packets from a channel and output to link.
-func (link *LinkCommon) writePackets() {
-	debug.Printf("Starting to write packets on %s\n", link)
+func (common *LinkCommon) writePackets() {
+	debug(DbgFPkt, "Starting to write packets on %s\n", common)
 	for {
+		debug(DbgFPkt, "XXX select in writePackets")
 		select {
-		case pkt := <-link.outpkt:
-			addr := ether.Frame(pkt).GetEtherDest()
-			debug.Printf("[socket] <- len %d from link channel %s to %s\n",
+		case pkt := <-common.outpkt:
+			addr := ether.Frame(pkt).GetDst()
+			debug(DbgFPkt, "[socket] <- len %d from link channel %s to %s\n",
 				len(pkt),
-				link.intf.Name,
+				common.intf.Name,
 				addr)
-			n, err := link.sock.WritePacket(pkt, addr)
+			n, err := common.sock.WritePacket(pkt, addr)
 			if err != nil {
-				debug.Printf("Error writing packet to %s: %s\n",
-					link.intf.Name, err)
+				debug(DbgFPkt, "Error writing packet to %s: %s\n",
+					common.intf.Name, err)
 			} else {
-				debug.Printf("Wrote packet len %d/%d to %s\n",
-					len(pkt), n, link.intf.Name)
+				debug(DbgFPkt, "Wrote packet len %d/%d to %s\n",
+					len(pkt), n, common.intf.Name)
 			}
-		case <-link.quit:
-			debug.Printf("Got quit signal for %s, will stop writing to link\n", link)
+		case <-common.quit:
+			debug(DbgFPkt, "Got quit signal for %s, will stop writing to link\n", common)
 			return
 		}
 	}
 }
 
+// -------------------------------------------------------------
 // NewLink allocates and initializes a new LinkCommon structure.
-func NewLink(link Link, ifname string, inpkt chan<- *Frame, quit chan bool) (*LinkCommon, error) {
+// -------------------------------------------------------------
+func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) (*LinkCommon, error) {
 	var err error
 
 	common := &LinkCommon{
@@ -145,18 +152,4 @@ func NewLink(link Link, ifname string, inpkt chan<- *Frame, quit chan bool) (*Li
 	go common.writePackets()
 
 	return common, nil
-}
-
-var clnsTemplate = []uint8{
-	clns.LLCSSAP,
-	clns.LLCDSAP,
-	clns.LLCControl,
-	clns.IDRPISIS,
-	0, // Header Length
-	clns.Version,
-	clns.SysIDLen,
-	0, // PDU Type
-	clns.Version2,
-	0,            // Reserved
-	clns.MaxArea, // Max Area
 }

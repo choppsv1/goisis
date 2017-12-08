@@ -31,33 +31,33 @@ func MACKey(addr net.HardwareAddr) (mac MAC) {
 	return
 }
 
-// GetEtherDest returns the destination MAC of the Ethernet frame.
-func (p Frame) GetEtherDest() net.HardwareAddr {
+// GetDst returns the destination MAC of the Ethernet frame.
+func (p Frame) GetDst() net.HardwareAddr {
 	return net.HardwareAddr(p[0:6])
 }
 
-// SetEtherDest sets the destination MAC of the Ethernet frame.
-func (p Frame) SetEtherDest(addr net.HardwareAddr) {
+// SetDst sets the destination MAC of the Ethernet frame.
+func (p Frame) SetDst(addr net.HardwareAddr) {
 	copy(p[HdrEthDest:], addr[0:6])
 }
 
-// GetEtherSrc returns the source MAC address of the Ethernet frame.
-func (p Frame) GetEtherSrc() net.HardwareAddr {
+// GetSrc returns the source MAC address of the Ethernet frame.
+func (p Frame) GetSrc() net.HardwareAddr {
 	return net.HardwareAddr(p[6:12])
 }
 
-// SetEtherSrc returns the source MAC address of the Ethernet frame.
-func (p Frame) SetEtherSrc(addr net.HardwareAddr) {
+// SetSrc returns the source MAC address of the Ethernet frame.
+func (p Frame) SetSrc(addr net.HardwareAddr) {
 	copy(p[HdrEthSrc:], addr[0:6])
 }
 
-// GetEtherTypeLen returns the length field (type) of the Ethernet frame.
-func (p Frame) GetEtherTypeLen() int {
+// GetTypeLen returns the length field (type) of the Ethernet frame.
+func (p Frame) GetTypeLen() int {
 	return int(p[12])<<8 | int(p[13])
 }
 
-// SetEtherTypeLen returns the length field (type) of the Ethernet frame.
-func (p Frame) SetEtherTypeLen(typlen int) {
+// SetTypeLen returns the length field (type) of the Ethernet frame.
+func (p Frame) SetTypeLen(typlen int) {
 	p[12] = byte(typlen >> 8)
 	p[13] = byte(typlen & 0xFF)
 }
@@ -81,12 +81,12 @@ func (e ErrOurFrame) Error() string {
 // if something is incorrect.
 func (p Frame) ValidateFrame(ourSNPA map[MAC]bool) ([]byte, error) {
 	payload := p[HdrEthSize:]
-	etype := p.GetEtherTypeLen()
+	etype := p.GetTypeLen()
 	if len(payload) < 46 {
 		return nil, ErrInvalidFrame("payload < 46")
 	}
 
-	if ours := ourSNPA[MACKey(p.GetEtherSrc())]; ours {
+	if ours := ourSNPA[MACKey(p.GetSrc())]; ours {
 		return nil, ErrOurFrame(true)
 	}
 

@@ -12,11 +12,58 @@ func TestTlvF(t *testing.T) {
 	}
 }
 
-func TestNewFixedAddrsValue(t *testing.T) {
-	var nbrs []SystemID
-	b := Data{0, 6, 1, 2, 3, 4, 5, 6}
+func TestNewIntfIPv4AddrsValue(t *testing.T) {
+	b := Data{TypeIPv4IntfAddrs,
+		4,
+		1, 2, 3, 4}
+	addr := net.IPv4(1, 2, 3, 4)
 
-	if err := b.NewISNeighborsValue(&nbrs); err != nil {
+	addrs, err := b.IntfIPv4AddrsValue()
+	if err != nil {
+		t.Errorf("%s", err)
+	}
+	if len(addrs) != 1 {
+		t.Errorf("Returned address count not 1")
+	}
+	if !addr.Equal(addrs[0]) {
+		t.Errorf("Returned address %s not %s", addrs[0], addr)
+	}
+	// if bytes.Compare(addrs[0], addr) != 0 {
+	// 	t.Errorf("Returned address %s not %s", addrs[0], addr)
+	// }
+}
+
+// NewIntfIPv6AddrsValue returns slice of IPv6 interface addresses
+func TestNewIntfIPv6AddrsValue(t *testing.T) {
+	b := Data{TypeIPv6IntfAddrs,
+		16,
+		0xfc, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0xff,
+	}
+	addrs, err := b.IntfIPv6AddrsValue()
+	if err != nil {
+		t.Errorf("%s", err)
+	}
+	if len(addrs) != 1 {
+		t.Errorf("Returned address count not 1")
+	}
+
+	addr := net.ParseIP("fc00::ff")
+	if !addr.Equal(addrs[0]) {
+		t.Errorf("Returned address %s not %s", addrs[0], addr)
+	}
+}
+
+func TestISNeighborsValue(t *testing.T) {
+	var nbrs []SystemID
+	var err error
+	b := Data{TypeISNeighbors,
+		6,
+		1, 2, 3, 4, 5, 6}
+
+	if nbrs, err = b.ISNeighborsValue(); err != nil {
 		t.Errorf("Got Error: %s", err)
 	}
 
@@ -42,46 +89,3 @@ func TestNewFixedAddrsValue(t *testing.T) {
 // 	//fmt.Printf("len %d cap %d\n", len(elm.Value), cap(elm.Value))
 // 	fmt.Printf("Done\n")
 // }
-
-func TestNewIntfIPv4AddrsValue(t *testing.T) {
-	var addrs []net.IP
-	b := Data{TypeIPv4IntfAddrs,
-		4,
-		1, 2, 3, 4}
-	addr := net.IPv4(1, 2, 3, 4)
-
-	if err := b.NewIntfIPv4AddrsValue(&addrs); err != nil {
-		t.Errorf("%s", err)
-	}
-	if len(addrs) != 1 {
-		t.Errorf("Returned address count not 1")
-	}
-	if !addr.Equal(addrs[0]) {
-		t.Errorf("Returned address %s not %s", addrs[0], addr)
-	}
-	// if bytes.Compare(addrs[0], addr) != 0 {
-	// 	t.Errorf("Returned address %s not %s", addrs[0], addr)
-	// }
-}
-
-// NewIntfIPv6AddrsValue returns slice of IPv6 interface addresses
-func TestNewIntfIPv6AddrsValue(t *testing.T) {
-	var addrs []net.IP
-	addr := net.ParseIP("fc00::ff")
-	b := Data{TypeIPv6IntfAddrs,
-		16,
-		0xfc, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0x00,
-		0x00, 0x00, 0x00, 0xff,
-	}
-	if err := b.NewIntfIPv6AddrsValue(&addrs); err != nil {
-		t.Errorf("%s", err)
-	}
-	if len(addrs) != 1 {
-		t.Errorf("Returned address count not 1")
-	}
-	if !addr.Equal(addrs[0]) {
-		t.Errorf("Returned address %s not %s", addrs[0], addr)
-	}
-}

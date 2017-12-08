@@ -32,7 +32,7 @@ type ErrNoSpace struct {
 }
 
 func (e ErrNoSpace) Error() string {
-	return "Not enough space in PDU for TLV"
+	return fmt.Sprintf("Not enough space (offer: %d) for TLV (ask: %d)", e.capacity, e.required)
 }
 
 func (s SystemID) String() string {
@@ -138,12 +138,12 @@ func (b Data) Length() (int, error) {
 	if len(b) < 2 {
 		return -1, fmt.Errorf("Can't get length of %d len TLV", len(b))
 	}
-	if len(b[2:]) != int(b[1]) {
-		return -1, fmt.Errorf("Slice length %d != encoded TLV length %d",
-			len(b[2:]),
+	if len(b[2:]) < int(b[1]) {
+		return -1, fmt.Errorf("Slice length %d < encoded TLV length %d",
+			len(b[2:])-2,
 			int(b[1]))
 	}
-	return len(b[2:]), nil
+	return int(b[1]), nil
 }
 
 // Value get value of byte based TLV
@@ -204,7 +204,7 @@ func (b Data) ParseTLV() (map[Type][]Data, error) {
 	for len(tlvp) > 1 {
 		tlvtype := Type(tlvp[0])
 		tlvlen := int(tlvp[1])
-		fmt.Printf("DEBUG: TLV Type %s Len %d\n", tlvtype, tlvlen)
+		// fmt.Printf("DEBUG: TLV Type %s Len %d\n", tlvtype, tlvlen)
 		if tlvlen+2 > len(tlvp) {
 			return nil, ErrTLVSpaceCorrupt(fmt.Sprintf("%d exceeds %d", tlvlen+2, len(tlvp)))
 		}
@@ -214,22 +214,45 @@ func (b Data) ParseTLV() (map[Type][]Data, error) {
 	return tlv, nil
 }
 
-// NewIntfIPv4AddrsValue returns slice of IPv4 interface addresses.
-func (b Data) NewIntfIPv4AddrsValue(addrs *[]net.IP) error {
-	if err := b.newFixedValues(4, addrs); err != nil {
-		return err
+// IntfIPv4AddrsValue returns slice of IPv4 interface addresses.
+func (b Data) IntfIPv4AddrsValue() ([]net.IP, error) {
+	addrs := make([]net.IP, 0, 4)
+	return addrs, b.newFixedValues(4, &addrs)
+}
+
+// IntfIPv6AddrsValue returns slice of IPv6 interface addresses.
+func (b Data) IntfIPv6AddrsValue() ([]net.IP, error) {
+	addrs := make([]net.IP, 0, 4)
+	return addrs, b.newFixedValues(16, &addrs)
+}
+
+// ISNeighborsValue return array of neighbor system IDs.
+func (b Data) ISNeighborsValue() ([]SystemID, error) {
+	ids := make([]SystemID, 0, 2)
+	return ids, b.newFixedValues(6, &ids)
+}
+
+// AreaAddrsValue returns an array of address found in the TLV.
+func (b Data) AreaAddrsValue() ([][]byte, error) {
+	var addrs [][]byte
+
+	typ := Type(b[0])
+	if typ != TypeAreaAddrs {
+		return nil, fmt.Errorf("Incorrect TLV type %s expecting %s", Type(b[0]), TypeAreaAddrs)
 	}
-	return nil
-}
 
-// NewIntfIPv6AddrsValue returns slice of IPv6 interface addresses.
-func (b Data) NewIntfIPv6AddrsValue(addrs *[]net.IP) error {
-	return b.newFixedValues(16, addrs)
-}
-
-// NewISNeighborsValue return array of neighbor system IDs.
-func (b Data) NewISNeighborsValue(ids *[]SystemID) error {
-	return b.newFixedValues(6, ids)
+	alen := int(b[1])
+	for valp := b[2 : alen+2]; len(valp) > 0; valp = valp[1+alen:] {
+		alen = int(valp[0])
+		if alen > len(valp[1:]) {
+			return nil, fmt.Errorf("Area address longer (%d) than available space (%d)", alen, len(valp[1:]))
+		}
+		if alen == 0 {
+			return nil, fmt.Errorf("Invalid zero-length area address")
+		}
+		addrs = append(addrs, valp[1:1+alen])
+	}
+	return addrs, nil
 }
 
 // RouterIDValue returns the Router ID found in the TLV.
@@ -260,14 +283,13 @@ func min(a, b int) int {
 	return b
 }
 
-// GetPacketOffset returns the length of bytes between cur and the packet start
+// GetOffset returns the length of bytes between cur and the packet start
 // of p.
-func GetPacketOffset(p Data, cur Data) int {
+func GetOffset(p Data, cur Data) int {
 	if cap(cur) == 0 {
-		// This just means we fill the buffer perfectly
+		// This means we filled the buffer perfectly
 		return len(p)
 	}
-
 	cp := uintptr(unsafe.Pointer(&cur[0]))
 	pp := uintptr(unsafe.Pointer(&p[0]))
 	return int(cp - pp)
@@ -275,9 +297,9 @@ func GetPacketOffset(p Data, cur Data) int {
 
 // AddPadding adds the largest padding TLV that will fit in the packet buffer.
 func AddPadding(p Data) (Data, error) {
-	tlvlen := min(255, cap(p)-2)
+	tlvlen := min(255, len(p)-2)
 	if tlvlen < 0 {
-		return nil, ErrNoSpace{2, cap(p)}
+		return nil, ErrNoSpace{2, len(p)}
 	}
 	p[0] = TypePadding
 	p[1] = byte(tlvlen)
@@ -287,8 +309,8 @@ func AddPadding(p Data) (Data, error) {
 // AddArea adds the given area in a TLV.
 func AddArea(p Data, areaID []byte) (Data, error) {
 	tlvlen := len(areaID) + 1
-	if 2+tlvlen > cap(p) {
-		return nil, ErrNoSpace{2 + tlvlen, cap(p)}
+	if 2+tlvlen > len(p) {
+		return nil, ErrNoSpace{2 + tlvlen, len(p)}
 	}
 	p[0] = uint8(TypeAreaAddrs)
 	p[1] = byte(tlvlen)
@@ -301,8 +323,8 @@ func AddArea(p Data, areaID []byte) (Data, error) {
 // AddNLPID adds the array of NLPID to the packet in a TLV
 func AddNLPID(p Data, nlpid []byte) (Data, error) {
 	tlvlen := len(nlpid)
-	if 2+tlvlen > cap(p) {
-		return nil, ErrNoSpace{2 + tlvlen, cap(p)}
+	if 2+tlvlen > len(p) {
+		return nil, ErrNoSpace{2 + tlvlen, len(p)}
 	}
 	p[0] = TypeNLPID
 	p[1] = byte(tlvlen)
@@ -313,40 +335,39 @@ func AddNLPID(p Data, nlpid []byte) (Data, error) {
 
 // Track is used to track an open TLV.
 type Track struct {
-	start   Data
-	end     Data
-	typ     Type
-	addhead func(*Track) error
+	Type   Type
+	start  Data
+	end    Data
+	addhdr func(typ Type, b Data) (Data, error)
 }
 
 func _open(t *Track) error {
 	if len(t.start) < 2 {
 		return ErrNoSpace{2, len(t.start)}
 	}
-	t.start[0] = byte(t.typ)
+	t.start[0] = byte(t.Type)
 	t.end = t.start[2:]
-	if t.addhead != nil {
-		return t.addhead(t)
+	if t.addhdr != nil {
+		var err error
+		if t.end, err = t.addhdr(t.Type, t.end); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // Open a TLV with optional function to add a header before the variable data.
-func Open(p Data, typ Type, addhead func(*Track) error) (*Track, error) {
-	t := &Track{p, nil, typ, addhead}
-	err := _open(t)
-	if err != nil {
-		return nil, err
-	}
-	return t, nil
+func Open(p Data, typ Type, addheader func(Type, Data) (Data, error)) (Track, error) {
+	t := Track{typ, p, nil, addheader}
+	return t, _open(&t)
 }
 
 // Alloc allocates space in an opened TLV.
-func Alloc(t *Track, reqd int) (Data, error) {
+func (t *Track) Alloc(reqd int) (Data, error) {
 	if len(t.end) < reqd {
 		return nil, ErrNoSpace{reqd, len(t.end)}
 	}
-	tlvlen := GetPacketOffset(t.start, t.end)
+	tlvlen := GetOffset(t.start, t.end)
 	if tlvlen+reqd > 255 {
 		t.start[1] = byte(tlvlen)
 		t.start = t.end
@@ -355,7 +376,7 @@ func Alloc(t *Track, reqd int) (Data, error) {
 			return nil, err
 		}
 		// Header may have been added.
-		tlvlen = GetPacketOffset(t.start, t.end)
+		tlvlen = GetOffset(t.start, t.end)
 		if tlvlen+reqd > 255 {
 			return nil, ErrNoSpace{reqd, 255}
 		}
@@ -369,8 +390,8 @@ func Alloc(t *Track, reqd int) (Data, error) {
 }
 
 // Close an open TLV.
-func Close(t *Track) Data {
-	t.start[1] = byte(GetPacketOffset(t.start, t.end))
+func (t *Track) Close() Data {
+	t.start[1] = byte(GetOffset(t.start, t.end) - 2)
 	return t.end
 }
 
@@ -389,10 +410,10 @@ func AddAdjSNPA(p Data, addrs []net.HardwareAddr) (Data, error) {
 		var p Data
 
 		alen := len(addr)
-		if p, err = Alloc(tlv, alen); err != nil {
+		if p, err = tlv.Alloc(alen); err != nil {
 			return nil, err
 		}
 		copy(p, addr)
 	}
-	return Close(tlv), nil
+	return tlv.Close(), nil
 }

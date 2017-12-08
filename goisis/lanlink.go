@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
@@ -9,11 +10,15 @@ import (
 	"net"
 )
 
+// lanLinkCircuitIDs is used to allocate circuit IDs
 var lanLinkCircuitIDs = [2]byte{0, 0}
 
+// ourSNPA keeps track of all of our SNPA to check for looped back frames
 var ourSNPA = make(map[ether.MAC]bool)
 
+// ---------------------------------------------------------------
 // LANLink is a structure holding information on a IS-IS LAN link.
+// ---------------------------------------------------------------
 type LANLink struct {
 	*LinkCommon
 	level     int
@@ -29,8 +34,17 @@ func (link *LANLink) String() string {
 	return fmt.Sprintf("LANLink(%s level %d)", link.LinkCommon, link.level)
 }
 
+// -----------------------------------------
+// GetOurSNPA returns the SNPA for this link
+// -----------------------------------------
+func (link *LANLink) GetOurSNPA() net.HardwareAddr {
+	return link.LinkCommon.intf.HardwareAddr
+}
+
+// ------------------------------------------------------
 // NewLANLink creates a LAN link for a given IS-IS level.
-func NewLANLink(ifname string, inpkt chan<- *Frame, quit chan bool, level int) (*LANLink, error) {
+// ------------------------------------------------------
+func NewLANLink(ifname string, inpkt chan<- *RecvFrame, quit chan bool, level int) (*LANLink, error) {
 	var err error
 
 	link := &LANLink{
@@ -49,19 +63,36 @@ func NewLANLink(ifname string, inpkt chan<- *Frame, quit chan bool, level int) (
 
 	lanLinkCircuitIDs[link.lindex]++
 	link.lclCircID = lanLinkCircuitIDs[link.lindex]
-	copy(link.lanID[:], SystemID)
+	copy(link.lanID[:], GlbSystemID)
 	link.lanID[clns.SysIDLen] = link.lclCircID
 
 	// Record our SNPA in the map of our SNPA
 	ourSNPA[ether.MACKey(link.LinkCommon.intf.HardwareAddr)] = true
 
-	go sendLANHellos(link, link.helloInt, quit)
+	go SendLANHellos(link, link.helloInt, quit)
 
 	return link, nil
 }
 
+// clnsTemplate are the static values we use in the CLNS header.
+var clnsTemplate = []uint8{
+	clns.LLCSSAP,
+	clns.LLCDSAP,
+	clns.LLCControl,
+	clns.IDRPISIS,
+	0, // Header Length
+	clns.Version,
+	clns.SysIDLen,
+	0, // PDU Type
+	clns.Version2,
+	0,            // Reserved
+	clns.MaxArea, // Max Area
+}
+
+// ---------------------------------------------------------------------------
 // OpenPDU returns a frame buffer sized to the MTU of the interface (including
 // the L2 frame header) after initializing the CLNS header fields.
+// ---------------------------------------------------------------------------
 func (link *LANLink) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.Frame, []byte, []byte) {
 	etherp := make([]byte, link.intf.MTU+14)
 
@@ -74,9 +105,11 @@ func (link *LANLink) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.
 	return etherp, clnsp, clnsp[clns.HdrCLNSSize:]
 }
 
+// -------------------------------------------------------------
 // ClosePDU finalizes the PDU length fields given endp "pointer"
+// -------------------------------------------------------------
 func (link *LANLink) ClosePDU(etherp ether.Frame, endp []byte) error {
-	ethlen := tlv.GetPacketOffset([]byte(etherp), endp)
+	ethlen := tlv.GetOffset([]byte(etherp), endp)
 	payload := ethlen - ether.HdrEthSize
 	pdulen := payload - clns.HdrLLCSize
 	pdutype := etherp[ether.HdrEthSize+clns.HdrCLNSPDUType]
@@ -87,46 +120,21 @@ func (link *LANLink) ClosePDU(etherp ether.Frame, endp []byte) error {
 	pkt.PutUInt16(etherp[lenoff:], uint16(pdulen))
 
 	etherp = etherp[0 : payload+ether.HdrEthSize]
-	etherp.SetEtherTypeLen(payload)
+	etherp.SetTypeLen(payload)
 
-	debug.Printf("Closing PDU with pdulen %d payload %d framelen %d",
+	debug(DbgFPkt, "Closing PDU with pdulen %d payload %d framelen %d",
 		pdulen, payload, len(etherp))
 	return nil
 }
 
-// DISInfoChanged is called when something has happened to require rerunning of
-// DIS election on this LAN.
-func (link *LANLink) DISInfoChanged(level int) {
-	// XXX
-}
-
-// ErrIIH is a general error in IIH packet processing
-type ErrIIH string
-
-func (e ErrIIH) Error() string {
-	return fmt.Sprintf("ErrIIH: %s", string(e))
-}
-
-func (link *LANLink) processIIH(frame *Frame, payload []byte, level int, tlvs map[tlv.Type][]tlv.Data) error {
-	if level == 1 {
-		// Expect 1 and only 1 Area TLV
-		atlv := tlvs[tlv.TypeAreaAddrs]
-		if len(atlv) != 1 {
-			return ErrIIH(fmt.Sprintf("INFO: areaMismatch: Incorrect area TLV count: %d", len(atlv)))
-		}
-		// XXX Verify at least 1 area matches
-		// return ErrIIH(fmt.Sprintf("TRAP areaMismatch: no matching areas"))
-	}
-	// _ == rundis
-	eframe := ether.Frame(frame.pkt)
-	link.adjdb.UpdateAdj(payload, tlvs, eframe.GetEtherSrc())
-	return nil
-}
+// =================
+// Packet Processing
+// =================
 
 // ProcessPacket is called with a frame received on this link. Currently all
 // received packets are handled serially in the order they arrive (using a
 // single go routine). This could be changed in the future don't rely on it.
-func (link *LANLink) ProcessPacket(frame *Frame) error {
+func (link *LANLink) ProcessPacket(frame *RecvFrame) error {
 	// Validate ethernet values.
 	// var src, dst [clns.SNPALen]byte
 	var pdutype clns.PDUType
@@ -134,7 +142,7 @@ func (link *LANLink) ProcessPacket(frame *Frame) error {
 	payload, err := ether.Frame(frame.pkt).ValidateFrame(ourSNPA)
 	if err != nil {
 		if err == ether.ErrOurFrame(true) {
-			debug.Printf("Dropping our own frame")
+			debug(DbgFPkt, "Dropping our own frame")
 			return nil
 		}
 		return err
@@ -145,10 +153,10 @@ func (link *LANLink) ProcessPacket(frame *Frame) error {
 	}
 
 	// XXX check for source being us.
-	// copy(src[:], frame.pkt.GetEtherSrc())
+	// copy(src[:], frame.pkt.GetSrc())
 
 	// XXX check for expected dst (mcast or us)
-	// copy(dst[:], frame.pkt.GetEtherDest())
+	// copy(dst[:], frame.pkt.GetDst())
 
 	payload, err = clns.ValidatePacket(payload)
 	if err != nil {
@@ -165,7 +173,6 @@ func (link *LANLink) ProcessPacket(frame *Frame) error {
 		return nil
 	}
 
-	debug.Printf("INFO: paylen len before parse %d", len(payload))
 	tlvp := tlv.Data(payload[clns.PDUTLVOffMap[pdutype]:])
 	tlvs, err := tlvp.ParseTLV()
 	if err != nil {
@@ -174,29 +181,65 @@ func (link *LANLink) ProcessPacket(frame *Frame) error {
 
 	switch pdutype {
 	case clns.PDUTypeIIHLANL1:
-		return link.processIIH(frame, payload, level, tlvs)
+		return RecvLANHello(link, frame, payload, level, tlvs)
 	case clns.PDUTypeIIHLANL2:
-		return link.processIIH(frame, payload, level, tlvs)
+		return RecvLANHello(link, frame, payload, level, tlvs)
 	case clns.PDUTypeLSPL1:
-		logger.Printf("INFO: ignoring LSPL1 on %s for now", link)
+		debug(DbgFPkt, "INFO: ignoring LSPL1 on %s for now", link)
 		return nil
 	case clns.PDUTypeLSPL2:
-		logger.Printf("INFO: ignoring LSPL2 on %s for now", link)
+		debug(DbgFPkt, "INFO: ignoring LSPL2 on %s for now", link)
 		return nil
 	case clns.PDUTypeCSNPL1:
-		logger.Printf("INFO: ignoring CSNPL1 on %s for now", link)
+		debug(DbgFPkt, "INFO: ignoring CSNPL1 on %s for now", link)
 		return nil
 	case clns.PDUTypeCSNPL2:
-		logger.Printf("INFO: ignoring CSNPL2 on %s for now", link)
+		debug(DbgFPkt, "INFO: ignoring CSNPL2 on %s for now", link)
 		return nil
 	case clns.PDUTypePSNPL1:
-		logger.Printf("INFO: ignoring PSNPL1 on %s for now", link)
+		debug(DbgFPkt, "INFO: ignoring PSNPL1 on %s for now", link)
 		return nil
 	case clns.PDUTypePSNPL2:
-		logger.Printf("INFO: ignoring PSNPL2 on %s for now", link)
+		debug(DbgFPkt, "INFO: ignoring PSNPL2 on %s for now", link)
 		return nil
 	default:
 		logger.Printf("WARNING: ignoring unexpected PDU type %s on %s", pdutype, link)
 		return nil
 	}
+}
+
+// ===================
+// Adjacency Functions
+// ===================
+
+// ----------------------------------------------------------------------------
+// DISInfoChanged is called when something has happened to require rerunning of
+// DIS election on this LAN.
+// ----------------------------------------------------------------------------
+func (link *LANLink) DISInfoChanged(level int) {
+	// XXX
+}
+
+// --------------------------------------------------------------------------
+// UpdateAdjState updates the adj state according to the TLV found in the IIH
+// --------------------------------------------------------------------------
+func (link *LANLink) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error {
+	// Walk neighbor TLVs if we see ourselves mark adjacency Up.
+	for _, ntlv := range tlvs[tlv.TypeISNeighbors] {
+		addrs, err := ntlv.ISNeighborsValue()
+		if err != nil {
+			logger.Printf("ERROR: processing IS Neighbors TLV from %s: %s", a, err)
+			return err
+		}
+		for _, snpa := range addrs {
+			if bytes.Equal(snpa, link.GetOurSNPA()) {
+				a.State = AdjStateUp
+				break
+			}
+		}
+		if a.State == AdjStateUp {
+			break
+		}
+	}
+	return nil
 }

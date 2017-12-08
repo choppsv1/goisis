@@ -1,9 +1,11 @@
 package clns
 
 import (
+	"encoding/hex"
 	"fmt"
 	"github.com/choppsv1/goisis/pkt"
 	"net"
+	"strings"
 )
 
 // ===============================
@@ -177,7 +179,7 @@ func (typ PDUType) String() string {
 type ErrUnkPDUType uint8
 
 func (e ErrUnkPDUType) Error() string {
-	return fmt.Sprintf("unknown PDU type %d", string(e))
+	return fmt.Sprintf("unknown PDU type %d", uint8(e))
 }
 
 //
@@ -274,33 +276,36 @@ type LSPID [LSPIDLen]byte
 //
 func ISOString(iso []byte, extratail bool) string {
 	ilen := len(iso)
+	wlen := ilen / 2
 	exb := (ilen % 2) == 1
-	rv := ""
+	var f string
 	if !exb {
-		i := 0
-		rv += fmt.Sprintf("%02x%02x", iso[i], iso[i+1])
-		for i = 2; i < ilen; i += 2 {
-			rv += fmt.Sprintf(".%02x%02x", iso[i], iso[i+1])
-		}
-		return rv
+		f = strings.Repeat(".%02x%02x", wlen)[1:]
 	} else if extratail {
-		i := 0
-		for ; i < ilen-1; i += 2 {
-			rv += fmt.Sprintf("%02x%02x.", iso[i], iso[i+1])
-		}
-		rv += fmt.Sprintf("%02x", iso[i])
+		f = strings.Repeat(".%02x%02x", wlen+1)[1 : 9*(wlen+1)-5+1]
 	} else {
-		rv += fmt.Sprintf("%02x", iso[0])
-		for i := 1; i < ilen; i += 2 {
-			rv += fmt.Sprintf(".%02x%02x", iso[i], iso[i+1])
-		}
+		f = strings.Repeat(".%02x%02x", wlen+1)[5 : 9*(wlen+1)]
 	}
-	return rv
+	is := make([]interface{}, len(iso))
+	for i, v := range iso {
+		is[i] = v
+	}
+	return fmt.Sprintf(f, is...)
 }
 
-// ------------------------------------------------------------
+//
+// ISODecode returns a byte slice of the hexidecimal string value given in "ISO"
+// form
+//
+func ISODecode(isos string) (iso []byte, err error) {
+	isos = strings.Replace(isos, ".", "", -1)
+	iso, err = hex.DecodeString(isos)
+	return
+}
+
+//
 // getPDUType returns the PDU type (no-checks) from the payload
-// ------------------------------------------------------------
+//
 func getPDUType(payload []byte) PDUType {
 	return PDUType(payload[HdrCLNSPDUType])
 }

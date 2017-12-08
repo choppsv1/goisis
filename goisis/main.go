@@ -10,34 +10,19 @@ import (
 	"strings"
 )
 
-func processPackets(linkdb *LinkDB) {
-	for {
-		select {
-		case frame := <-linkdb.inpkts:
-			debug.Printf(" <- len %d from link %s to %s from %s llclen %d\n",
-				len(frame.pkt),
-				frame.link.(*LANLink).intf.Name,
-				ether.Frame(frame.pkt).GetEtherDest(),
-				ether.Frame(frame.pkt).GetEtherSrc(),
-				ether.Frame(frame.pkt).GetEtherTypeLen())
+// GlbSystemID is the system ID of this IS-IS instance
+var GlbSystemID net.HardwareAddr
 
-			err := frame.link.ProcessPacket(frame)
-			if err != nil {
-				debug.Printf("Got error processing packet: %s\n", err)
-			}
-		}
-	}
-}
+// GlbAreaID is the area this IS-IS instance is in.
+var GlbAreaID []byte
 
-// SystemID is the system ID of this IS-IS instance
-var SystemID net.HardwareAddr
+// GlbNLPID holds an array of the NLPID that we support
+// var GlbNLPID = []byte{clns.NLPIDIPv4}
+var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 
-// AreaID is the area this IS-IS instance is in.
-var AreaID []byte
-
-// NLPID holds an array of the NLPID that we support
-// var NLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
-var NLPID = []byte{clns.NLPIDIPv4}
+// GlbDebug are the enable debug.
+//var GlbDebug = DbgFPkt | DbgFAdj
+var GlbDebug DbgFlag
 
 func main() {
 	var err error
@@ -55,11 +40,11 @@ func main() {
 
 	linkdb := NewLinkDB()
 	quit := make(chan bool)
-	SystemID, err = net.ParseMAC(*sysIDPtr)
+	GlbSystemID, err = net.ParseMAC(*sysIDPtr)
 
 	// XXX eventually support custom areas
-	AreaID = make([]byte, 1)
-	AreaID[0] = 0x00
+	GlbAreaID = make([]byte, 1)
+	GlbAreaID[0] = 0x00
 
 	// Get interfaces to run on.
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
@@ -76,4 +61,27 @@ func main() {
 
 	processPackets(linkdb)
 	close(quit)
+}
+
+// -----------------------------------------------------------------------------
+// processPackets handles all incoming packets (frames) serially. If performance
+// is an issue we could parallelize this based on packet type etc..
+// -----------------------------------------------------------------------------
+func processPackets(linkdb *LinkDB) {
+	for {
+		select {
+		case frame := <-linkdb.inpkts:
+			debug(DbgFPkt, " <- len %d from link %s to %s from %s llclen %d\n",
+				len(frame.pkt),
+				frame.link.(*LANLink).intf.Name,
+				ether.Frame(frame.pkt).GetDst(),
+				ether.Frame(frame.pkt).GetSrc(),
+				ether.Frame(frame.pkt).GetTypeLen())
+
+			err := frame.link.ProcessPacket(frame)
+			if err != nil {
+				debug(DbgFPkt, "Error processing packet: %s\n", err)
+			}
+		}
+	}
 }
