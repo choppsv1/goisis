@@ -152,11 +152,14 @@ func (link *LANLink) ProcessPacket(frame *RecvFrame) error {
 		return nil
 	}
 
-	// XXX check for source being us.
-	// copy(src[:], frame.pkt.GetSrc())
-
-	// XXX check for expected dst (mcast or us)
-	// copy(dst[:], frame.pkt.GetDst())
+	// Check for expected ether dst (correct mcast or us)
+	dst := ether.Frame(frame.pkt).GetDst()
+	if !bytes.Equal(dst, clns.AllLxIS[link.lindex]) {
+		if !bytes.Equal(dst, link.GetOurSNPA()) {
+			logger.Printf("Dropping IS-IS frame to non-IS-IS address, exciting extensions?")
+			return nil
+		}
+	}
 
 	payload, err = clns.ValidatePacket(payload)
 	if err != nil {
