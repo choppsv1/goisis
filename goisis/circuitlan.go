@@ -19,7 +19,7 @@ var ourSNPA = make(map[ether.MAC]bool)
 //
 type CircuitLAN struct {
 	*CircuitBase
-	levlink [2]*LANLink
+	levlink [2]*LinkLAN
 }
 
 func (link *CircuitLAN) String() string {

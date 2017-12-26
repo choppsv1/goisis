@@ -14,10 +14,10 @@ import (
 var lanLinkCircuitIDs = [2]byte{0, 0}
 
 //
-// LANLink is a structure holding information on a IS-IS Specific level
+// LinkLAN is a structure holding information on a IS-IS Specific level
 // operation on a LAN link.
 //
-type LANLink struct {
+type LinkLAN struct {
 	link      *CircuitLAN
 	level     clns.Level
 	lindex    clns.LIndex //  level - 1 for array indexing
@@ -35,15 +35,15 @@ type LANLink struct {
 	disElected     bool
 }
 
-func (llink *LANLink) String() string {
+func (llink *LinkLAN) String() string {
 	return fmt.Sprintf("LANLevelLink(%s level %d)", llink.link.LinkCommon, llink.level)
 }
 
 //
 // NewLANLink creates a LAN link for a given IS-IS level.
 //
-func NewLANLink(link *CircuitLAN, lindex clns.LIndex, quit chan bool) *LANLink {
-	llink := &LANLink{
+func NewLANLink(link *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
+	llink := &LinkLAN{
 		link:     link,
 		level:    clns.Level(lindex + 1),
 		lindex:   lindex,
@@ -75,7 +75,7 @@ func NewLANLink(link *CircuitLAN, lindex clns.LIndex, quit chan bool) *LANLink {
 // ProcessPDU is called with a frame received on this link. Currently all
 // received packets are handled serially in the order they arrive (using a
 // single go routine). This could be changed in the future don't rely on it.
-func (llink *LANLink) ProcessPDU(pdu *RecvPDU) error {
+func (llink *LinkLAN) ProcessPDU(pdu *RecvPDU) error {
 	// Validate ethernet values.
 	// var src, dst [clns.SNPALen]byte
 	level, err := pdu.pdutype.GetPDULevel()
@@ -109,7 +109,7 @@ func (llink *LANLink) ProcessPDU(pdu *RecvPDU) error {
 // ===================
 
 // UpdateAdj updates an adjacency with the new PDU information.
-func (llink *LANLink) UpdateAdj(pdu *RecvPDU) error {
+func (llink *LinkLAN) UpdateAdj(pdu *RecvPDU) error {
 	llink.adjdb.UpdateAdj(pdu)
 	return nil
 }
@@ -119,7 +119,7 @@ func (llink *LANLink) UpdateAdj(pdu *RecvPDU) error {
 // the llink. Initially this is a timer, and then it's based on changes in the
 // hello process.
 //
-func (llink *LANLink) startElectingDIS() {
+func (llink *LinkLAN) startElectingDIS() {
 	llink.disInfoChanged = make(chan bool)
 	dur := time.Second * time.Duration(llink.helloInt*2)
 	llink.disTimer = time.AfterFunc(dur, func() {
@@ -139,7 +139,7 @@ func (llink *LANLink) startElectingDIS() {
 // DISInfoChanged is called when something has happened to require rerunning of
 // DIS election on this LAN.
 //
-func (llink *LANLink) DISInfoChanged() {
+func (llink *LinkLAN) DISInfoChanged() {
 	llink.disLock.Lock()
 	defer llink.disLock.Unlock()
 	if llink.disTimer == nil {
@@ -150,7 +150,7 @@ func (llink *LANLink) DISInfoChanged() {
 //
 // UpdateAdjState updates the adj state according to the TLV found in the IIH
 //
-func (llink *LANLink) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error {
+func (llink *LinkLAN) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error {
 	// Walk neighbor TLVs if we see ourselves mark adjacency Up.
 	for _, ntlv := range tlvs[tlv.TypeISNeighbors] {
 		addrs, err := ntlv.ISNeighborsValue()
@@ -180,7 +180,7 @@ func (llink *LANLink) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error
 //
 // Locking: called with adjdb locked
 //
-func (llink *LANLink) disFindBest() (bool, *Adj) {
+func (llink *LinkLAN) disFindBest() (bool, *Adj) {
 	electPri := llink.priority
 	electID := GlbSystemID
 	var elect *Adj
@@ -215,7 +215,7 @@ func (llink *LANLink) disFindBest() (bool, *Adj) {
 	return elect == nil, elect
 }
 
-func (llink *LANLink) disElect() {
+func (llink *LinkLAN) disElect() {
 	debug(DbgFDIS, "Running DIS election on %s", llink)
 
 	llink.adjdb.lock.Lock()
