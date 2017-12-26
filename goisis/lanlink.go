@@ -18,7 +18,7 @@ var ourSNPA = make(map[ether.MAC]bool)
 // LANLink is a structure holding information on a IS-IS LAN link.
 //
 type LANLink struct {
-	*LinkCommon
+	*CircuitBase
 	levlink [2]*LANLevelLink
 }
 
@@ -41,7 +41,7 @@ func NewLANLink(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf cln
 
 	link := &LANLink{}
 
-	link.LinkCommon, err = NewLink(link, ifname, inpkt, quit)
+	link.LinkCommon, err = NewCircuitBase(link, ifname, inpkt, quit)
 	if err != nil {
 		return nil, err
 	}

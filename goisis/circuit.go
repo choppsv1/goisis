@@ -13,14 +13,14 @@ import (
 )
 
 //
-// Link is an IS-IS/CLNS interface.
+// Circuit is an IS-IS/CLNS physical interface.
 //
-type Link interface {
+type Circuit interface {
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 }
 
-// LevelLink is an interface representing level dependent operations on a link.
-type LevelLink interface {
+// Link is an represents level dependent operations on a circuit.
+type Link interface {
 	DISInfoChanged()
 	ProcessPDU(*RecvPDU) error
 	UpdateAdj(*RecvPDU) error
@@ -34,16 +34,16 @@ type RecvPDU struct {
 	payload []byte
 	pdutype clns.PDUType
 	tlvs    map[tlv.Type][]tlv.Data
-	link    LevelLink
+	link    Link
 	src     net.HardwareAddr
 	dst     net.HardwareAddr
 }
 
 //
-// LinkCommon collects common functionality from all types of links
+// CircuitBase collects common functionality from all types of circuits
 //
-type LinkCommon struct {
-	link   Link
+type CircuitBase struct {
+	link   Circuit
 	intf   *net.Interface
 	sock   raw.IntfSocket
 	inpkt  chan<- *RecvPDU
@@ -51,12 +51,12 @@ type LinkCommon struct {
 	quit   <-chan bool
 }
 
-func (common *LinkCommon) String() string {
+func (common *CircuitBase) String() string {
 	return fmt.Sprintf("Link(%s)", common.intf.Name)
 }
 
 // readPackets is a go routine to read packets from link and input to channel.
-func (common *LinkCommon) readPackets() {
+func (common *CircuitBase) readPackets() {
 	debug(DbgFPkt, "Starting to read packets on %s\n", common)
 	for {
 		pkt, from, err := common.sock.ReadPacket()
@@ -86,7 +86,7 @@ func (common *LinkCommon) readPackets() {
 }
 
 // writePackets is a go routine to read packets from a channel and output to link.
-func (common *LinkCommon) writePackets() {
+func (common *CircuitBase) writePackets() {
 	debug(DbgFPkt, "Starting to write packets on %s\n", common)
 	for {
 		debug(DbgFPkt, "XXX select in writePackets")
@@ -113,12 +113,12 @@ func (common *LinkCommon) writePackets() {
 }
 
 //
-// NewLink allocates and initializes a new LinkCommon structure.
+// NewCircuitBase allocates and initializes a new CircuitBase structure.
 //
-func NewLink(link Link, ifname string, inpkt chan<- *RecvPDU, quit chan bool) (*LinkCommon, error) {
+func NewCircuitBase(link Circuit, ifname string, inpkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
 	var err error
 
-	common := &LinkCommon{
+	common := &CircuitBase{
 		link:   link,
 		inpkt:  inpkt,
 		outpkt: make(chan []byte),

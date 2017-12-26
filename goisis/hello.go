@@ -129,7 +129,7 @@ func (e ErrIIH) Error() string {
 //
 // RecvLANHello receives IIH from on a given LAN link
 //
-func RecvLANHello(llink LevelLink, pdu *RecvPDU, level int) error {
+func RecvLANHello(llink Link, pdu *RecvPDU, level int) error {
 	debug(DbgFPkt, "IIH: processign from %s", pdu.src)
 
 	tlvs := pdu.tlvs

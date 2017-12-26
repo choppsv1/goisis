@@ -13,7 +13,7 @@ import (
 type AdjDB struct {
 	level    clns.Level
 	lindex   clns.LIndex
-	llink    LevelLink
+	llink    Link
 	lock     sync.Mutex
 	snpaMap  map[[clns.SNPALen]byte]*Adj
 	srcidMap map[[clns.SysIDLen]byte]*Adj
@@ -23,7 +23,7 @@ type AdjDB struct {
 // NewAdjDB creates and initializes a new adjacency database for a given link
 // and level.
 //
-func NewAdjDB(llink LevelLink, lindex clns.LIndex) *AdjDB {
+func NewAdjDB(llink Link, lindex clns.LIndex) *AdjDB {
 	db := &AdjDB{
 		level:    clns.Level(lindex + 1),
 		lindex:   lindex,
