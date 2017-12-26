@@ -51,8 +51,8 @@ func main() {
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
-		var lanlink *LANLink
-		lanlink, err = NewLANLink(ifname, linkdb.inpkts, quit, 1)
+		var lanlink *LANCircuit
+		lanlink, err = NewLANCircuit(ifname, linkdb.inpkts, quit, 1)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating link: %s", err)
 			os.Exit(1)

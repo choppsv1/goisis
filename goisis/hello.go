@@ -13,7 +13,7 @@ import (
 // SendLANHellos is a go routine that watches for hello timer events and sends
 // hellos when they are received.
 //
-func SendLANHellos(llink *LANLevelLink, interval int, quit chan bool) error {
+func SendLANHellos(llink *LANLink, interval int, quit chan bool) error {
 	debug(DbgFPkt, "Sending hellos on %s with interval %d", llink, interval)
 	ival := time.Second * time.Duration(interval)
 	ticker := time.NewTicker(ival) // XXX replace with jittered timer.
@@ -35,7 +35,7 @@ func SendLANHellos(llink *LANLevelLink, interval int, quit chan bool) error {
 	return nil
 }
 
-func sendLANHello(llink *LANLevelLink) error {
+func sendLANHello(llink *LANLink) error {
 	var err error
 	var pdutype clns.PDUType
 

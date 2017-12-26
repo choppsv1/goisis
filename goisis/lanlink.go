@@ -15,31 +15,31 @@ import (
 var ourSNPA = make(map[ether.MAC]bool)
 
 //
-// LANLink is a structure holding information on a IS-IS LAN link.
+// LANCircuit is a structure holding information on a IS-IS LAN link.
 //
-type LANLink struct {
+type LANCircuit struct {
 	*CircuitBase
-	levlink [2]*LANLevelLink
+	levlink [2]*LANLink
 }
 
-func (link *LANLink) String() string {
+func (link *LANCircuit) String() string {
 	return fmt.Sprintf("LANLink(%s)", link.LinkCommon)
 }
 
 //
 // GetOurSNPA returns the SNPA for this link
 //
-func (link *LANLink) getOurSNPA() net.HardwareAddr {
+func (link *LANCircuit) getOurSNPA() net.HardwareAddr {
 	return link.LinkCommon.intf.HardwareAddr
 }
 
 //
-// NewLANLink creates a LAN link for a given IS-IS level.
+// NewLANCircuit creates a LAN link for a given IS-IS level.
 //
-func NewLANLink(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf clns.LevelFlag) (*LANLink, error) {
+func NewLANCircuit(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf clns.LevelFlag) (*LANCircuit, error) {
 	var err error
 
-	link := &LANLink{}
+	link := &LANCircuit{}
 
 	link.LinkCommon, err = NewCircuitBase(link, ifname, inpkt, quit)
 	if err != nil {
@@ -51,7 +51,7 @@ func NewLANLink(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf cln
 
 	for i := uint(0); i < 2; i++ {
 		if (levelf & (1 << i)) != 0 {
-			link.levlink[i] = NewLANLevelLink(link, clns.LIndex(i), quit)
+			link.levlink[i] = NewLANLink(link, clns.LIndex(i), quit)
 		}
 	}
 
@@ -77,7 +77,7 @@ var clnsTemplate = []uint8{
 // OpenPDU returns a frame buffer sized to the MTU of the interface (including
 // the L2 frame header) after initializing the CLNS header fields.
 //
-func (link *LANLink) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.Frame, []byte, []byte) {
+func (link *LANCircuit) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.Frame, []byte, []byte) {
 	etherp := make([]byte, link.intf.MTU+14)
 
 	copy(etherp[ether.HdrEthDest:], dst)
@@ -92,7 +92,7 @@ func (link *LANLink) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.
 //
 // ClosePDU finalizes the PDU length fields given endp "pointer"
 //
-func (link *LANLink) ClosePDU(etherp ether.Frame, endp []byte) error {
+func (link *LANCircuit) ClosePDU(etherp ether.Frame, endp []byte) error {
 	ethlen := tlv.GetOffset([]byte(etherp), endp)
 	payload := ethlen - ether.HdrEthSize
 	pdulen := payload - clns.HdrLLCSize
@@ -117,7 +117,7 @@ func (link *LANLink) ClosePDU(etherp ether.Frame, endp []byte) error {
 
 // FrameToPDU is called to validate the frame per link type and return the
 // pdu payload. This will be called in the context of the packet read loop so be fast.
-func (link *LANLink) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
+func (link *LANCircuit) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
 	var err error
 
 	eframe := ether.Frame(frame)
