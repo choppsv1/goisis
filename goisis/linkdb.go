@@ -5,7 +5,7 @@ package main
 // ----------------------------------------
 type LinkDB struct {
 	links  map[string]interface{}
-	inpkts chan *RecvFrame
+	inpkts chan *RecvPDU
 }
 
 // ------------------------------------------------------
@@ -14,6 +14,6 @@ type LinkDB struct {
 func NewLinkDB() *LinkDB {
 	linkdb := new(LinkDB)
 	linkdb.links = make(map[string]interface{})
-	linkdb.inpkts = make(chan *RecvFrame)
+	linkdb.inpkts = make(chan *RecvPDU)
 	return linkdb
 }

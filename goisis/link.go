@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/raw"
 	"github.com/choppsv1/goisis/tlv"
@@ -11,33 +12,41 @@ import (
 	"syscall"
 )
 
-// ================================
+//
 // Link is an IS-IS/CLNS interface.
-// ================================
+//
 type Link interface {
-	DISInfoChanged(level int)
-	GetOurSNPA() net.HardwareAddr
-	ProcessPacket(*RecvFrame) error
+	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
+}
+
+// LevelLink is an interface representing level dependent operations on a link.
+type LevelLink interface {
+	DISInfoChanged()
+	ProcessPDU(*RecvPDU) error
+	UpdateAdj(*RecvPDU) error
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
 }
 
-// --------------------------------------------------------
-// Frame is a type passed by value for handling raw packets
-// --------------------------------------------------------
-type RecvFrame struct {
-	pkt  []byte
-	from syscall.Sockaddr
-	link Link
+//
+// RecvPDU is a type passed by value for handling frames after some
+// validation/baking.
+type RecvPDU struct {
+	payload []byte
+	pdutype clns.PDUType
+	tlvs    map[tlv.Type][]tlv.Data
+	link    LevelLink
+	src     net.HardwareAddr
+	dst     net.HardwareAddr
 }
 
-// ----------------------------------------------------------------
+//
 // LinkCommon collects common functionality from all types of links
-// ----------------------------------------------------------------
+//
 type LinkCommon struct {
 	link   Link
 	intf   *net.Interface
 	sock   raw.IntfSocket
-	inpkt  chan<- *RecvFrame
+	inpkt  chan<- *RecvPDU
 	outpkt chan []byte
 	quit   <-chan bool
 }
@@ -48,14 +57,9 @@ func (common *LinkCommon) String() string {
 
 // readPackets is a go routine to read packets from link and input to channel.
 func (common *LinkCommon) readPackets() {
-	var err error
-
 	debug(DbgFPkt, "Starting to read packets on %s\n", common)
 	for {
-		frame := RecvFrame{
-			link: common.link,
-		}
-		frame.pkt, frame.from, err = common.sock.ReadPacket()
+		pkt, from, err := common.sock.ReadPacket()
 		if err != nil {
 			if err == io.EOF {
 				debug(DbgFPkt, "EOF reading from %s, will stop reading from link\n", common)
@@ -65,8 +69,19 @@ func (common *LinkCommon) readPackets() {
 			continue
 		}
 		// debug(DbgFPkt, "Read packet on %s len(%d)\n", common.link, len(frame.pkt))
-		// XXX Do some early validation before sending on channel.
-		common.inpkt <- &frame
+
+		// Do Frame Validation and get PDU.
+		pdu := common.link.FrameToPDU(pkt, from)
+		if pdu == nil {
+			continue
+		}
+
+		pdu.payload, err = clns.ValidatePDU(pdu.payload)
+		if err != nil {
+			continue
+		}
+
+		common.inpkt <- pdu
 	}
 }
 
@@ -97,10 +112,10 @@ func (common *LinkCommon) writePackets() {
 	}
 }
 
-// -------------------------------------------------------------
+//
 // NewLink allocates and initializes a new LinkCommon structure.
-// -------------------------------------------------------------
-func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) (*LinkCommon, error) {
+//
+func NewLink(link Link, ifname string, inpkt chan<- *RecvPDU, quit chan bool) (*LinkCommon, error) {
 	var err error
 
 	common := &LinkCommon{

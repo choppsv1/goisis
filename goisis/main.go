@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
-	"github.com/choppsv1/goisis/ether"
 	"net"
 	"os"
 	"strings"
@@ -21,8 +20,9 @@ var GlbAreaID []byte
 var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 
 // GlbDebug are the enable debug.
-//var GlbDebug = DbgFPkt | DbgFAdj
-var GlbDebug DbgFlag
+var GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS
+
+// var GlbDebug DbgFlag
 
 func main() {
 	var err error
@@ -30,7 +30,7 @@ func main() {
 	// areaIDPtr := flag.String("areaid", "00", "area id of this instance")
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
-	sysIDPtr := flag.String("sysid", "00:00:00:00:00:01", "system id of this instance")
+	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
 	flag.Parse()
 
 	if *playPtr {
@@ -38,13 +38,14 @@ func main() {
 		return
 	}
 
-	linkdb := NewLinkDB()
-	quit := make(chan bool)
-	GlbSystemID, err = net.ParseMAC(*sysIDPtr)
+	GlbSystemID, err = clns.ISODecode(*sysIDPtr)
 
 	// XXX eventually support custom areas
 	GlbAreaID = make([]byte, 1)
 	GlbAreaID[0] = 0x00
+
+	linkdb := NewLinkDB()
+	quit := make(chan bool)
 
 	// Get interfaces to run on.
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
@@ -70,15 +71,8 @@ func main() {
 func processPackets(linkdb *LinkDB) {
 	for {
 		select {
-		case frame := <-linkdb.inpkts:
-			debug(DbgFPkt, " <- len %d from link %s to %s from %s llclen %d\n",
-				len(frame.pkt),
-				frame.link.(*LANLink).intf.Name,
-				ether.Frame(frame.pkt).GetDst(),
-				ether.Frame(frame.pkt).GetSrc(),
-				ether.Frame(frame.pkt).GetTypeLen())
-
-			err := frame.link.ProcessPacket(frame)
+		case pdu := <-linkdb.inpkts:
+			err := pdu.link.ProcessPDU(pdu)
 			if err != nil {
 				debug(DbgFPkt, "Error processing packet: %s\n", err)
 			}

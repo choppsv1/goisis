@@ -14,6 +14,7 @@ type DbgFlag int
 const (
 	DbgFPkt DbgFlag = 1 << iota
 	DbgFAdj
+	DbgFDIS
 )
 
 var dlogger = log.New(os.Stderr, "DEBUG:", log.Ldate|log.Ltime|log.Lmicroseconds)

@@ -138,7 +138,7 @@ const (
 	LSPRecvBufSize = 1492
 	DefHelloInt    = 10
 	DefHelloMult   = 3
-	DefHelloPri    = 1 // 64
+	DefHelloPri    = 64
 	LSPOrigBufSize = LSPRecvBufSize
 )
 
@@ -242,6 +242,49 @@ var PDULevelMap = map[PDUType]int{
 	PDUTypePSNPL2:   2,
 }
 
+//
+// LevelFlag is a bitmask of enabled levels
+//
+type LevelFlag int
+
+//
+// Level Flags
+//
+const (
+	L1Flag = 1 << iota
+	L2Flag
+)
+
+func (lf LevelFlag) String() string {
+	switch lf {
+	case 0x1:
+		return "L1"
+	case 0x2:
+		return "L2"
+	case 0x3:
+		return "L12"
+	}
+	return fmt.Sprintf("BadLevelFlag:0x%x", int(lf))
+}
+
+//
+// Level is an IS-IS level
+//
+type Level int
+
+func (level Level) String() string {
+	return fmt.Sprintf("L%d", int(level))
+}
+
+//
+// LIndex is an IS-IS level - 1
+//
+type LIndex int
+
+func (lindex LIndex) String() string {
+	return fmt.Sprintf("L%d", int(lindex+1))
+}
+
 // AllL1IS is the Multicast MAC to reach all level-1 IS
 var AllL1IS = net.HardwareAddr{0x01, 0x80, 0xC2, 0x00, 0x00, 0x14}
 
@@ -257,17 +300,33 @@ var AllLxIS = []net.HardwareAddr{AllL1IS, AllL2IS}
 // SNPA is a MAC address in ISO talk.
 type SNPA [SNPALen]byte
 
+func (s SNPA) String() string {
+	return net.HardwareAddr(s[:]).String()
+}
+
 // SystemID is a 6 octet system identifier all IS have uniq system IDs
 type SystemID [SysIDLen]byte
+
+func (s SystemID) String() string {
+	return ISOString(s[:], false)
+}
 
 // NodeID identifies a node in the network graph. It is comprised of a system ID
 // and a pseudo-node byte for identifying LAN Pnodes (or 0 for real nodes).
 type NodeID [NodeIDLen]byte
 
+func (s NodeID) String() string {
+	return ISOString(s[:], true)
+}
+
 // LSPID identifies an LSP segment for a node in the network graph, it is
 // comprised of a NodeID and a final segment octet to allow for multiple
 // segments to describe an full LSP.
 type LSPID [LSPIDLen]byte
+
+func (s LSPID) String() string {
+	return ISOString(s[:], false)
+}
 
 //
 // ISOString returns a string representation of an ISO address (e.g., system ID
@@ -323,6 +382,18 @@ func GetPDUType(payload []byte) (PDUType, error) {
 }
 
 //
+// GetPDULevel returns the level of the PDU type or an error if not level based.
+//
+func (pdutype PDUType) GetPDULevel() (int, error) {
+
+	level, ok := PDULevelMap[pdutype]
+	if !ok {
+		return 0, fmt.Errorf("%s is not a level based PDU type", pdutype)
+	}
+	return level, nil
+}
+
+//
 // ErrInvalidPacket is returned when we fail to validate the packet, this will
 // be broken down into more specific cases.
 //
@@ -336,7 +407,7 @@ func (e ErrInvalidPacket) Error() string {
 // version of it. (ISO10589 8.4.2.1)
 // Checked Valid Items:  PDU Type, Header Length, PDU Length, Advertised
 // versions(*), Advertised sizes(*) -- (*) XXX finish
-func ValidatePacket(payload []byte) ([]byte, error) {
+func ValidatePDU(payload []byte) ([]byte, error) {
 	pdutype, err := GetPDUType(payload)
 	if err != nil {
 		return nil, err

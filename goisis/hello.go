@@ -4,25 +4,24 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
-	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/tlv"
 	"time"
 )
 
-// ------------------------------------------------------------------------
-// SendHellos is a go routine that watches for hello timer events and sends
+//
+// SendLANHellos is a go routine that watches for hello timer events and sends
 // hellos when they are received.
-// ------------------------------------------------------------------------
-func SendLANHellos(link *LANLink, interval int, quit chan bool) error {
-	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, interval)
+//
+func SendLANHellos(llink *LANLevelLink, interval int, quit chan bool) error {
+	debug(DbgFPkt, "Sending hellos on %s with interval %d", llink, interval)
 	ival := time.Second * time.Duration(interval)
 	ticker := time.NewTicker(ival) // XXX replace with jittered timer.
 	go func() {
-		sendLANHello(link)
-		debug(DbgFPkt, "Sent initial IIH on %s entering ticker loop", link)
+		sendLANHello(llink)
+		debug(DbgFPkt, "Sent initial IIH on %s entering ticker loop", llink)
 		for range ticker.C {
-			sendLANHello(link)
+			sendLANHello(llink)
 		}
 	}()
 	// Wait for quit ... do we need to do this or will the ticker stop
@@ -31,18 +30,18 @@ func SendLANHellos(link *LANLink, interval int, quit chan bool) error {
 	select {
 	case <-quit:
 		ticker.Stop()
-		debug(DbgFPkt, "Stop sending IIH on %s", link)
+		debug(DbgFPkt, "Stop sending IIH on %s", llink)
 	}
 	return nil
 }
 
-func sendLANHello(link *LANLink) error {
+func sendLANHello(llink *LANLevelLink) error {
 	var err error
 	var pdutype clns.PDUType
 
-	debug(DbgFPkt, "Sending IIH on %s", link)
+	debug(DbgFPkt, "Sending IIH on %s", llink)
 
-	if link.level == 1 {
+	if llink.level == 1 {
 		pdutype = clns.PDUTypeIIHLANL1
 	} else {
 		pdutype = clns.PDUTypeIIHLANL2
@@ -50,25 +49,25 @@ func sendLANHello(link *LANLink) error {
 
 	// XXX we want the API to return payload here and later we convert frame
 	// in close so that we aren't dependent on ethernet
-	etherp, _, iihp := link.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
+	etherp, _, iihp := llink.link.OpenPDU(pdutype, clns.AllLxIS[llink.lindex])
 
 	// ----------
 	// IIH Header
 	// ----------
 
-	iihp[clns.HdrIIHLANCircType] = uint8(link.level)
+	iihp[clns.HdrIIHLANCircType] = uint8(llink.level)
 	copy(iihp[clns.HdrIIHLANSrcID:], GlbSystemID)
 	pkt.PutUInt16(iihp[clns.HdrIIHLANHoldTime:],
-		uint16(link.helloInt*link.holdMult))
+		uint16(llink.helloInt*llink.holdMult))
 	iihp[clns.HdrIIHLANPriority] = byte(clns.DefHelloPri) & 0x7F
-	copy(iihp[clns.HdrIIHLANLANID:], link.lanID[:])
+	copy(iihp[clns.HdrIIHLANLANID:], llink.lanID[:])
 	endp := iihp[clns.HdrIIHLANSize:]
 
 	// --------
 	// Add TLVs
 	// --------
 
-	if link.level == 1 {
+	if llink.level == 1 {
 		endp, err = tlv.AddArea(endp, GlbAreaID)
 		if err != nil {
 			debug(DbgFPkt, "Error adding area TLV: %s", err)
@@ -82,7 +81,7 @@ func sendLANHello(link *LANLink) error {
 		return err
 	}
 
-	addrs := link.adjdb.GetAdjSNPA()
+	addrs := llink.adjdb.GetAdjSNPA()
 	if len(addrs) > 0 {
 		t, err := tlv.Open(endp, tlv.TypeISNeighbors, nil)
 		if err != nil {
@@ -110,12 +109,12 @@ func sendLANHello(link *LANLink) error {
 		}
 	}
 
-	link.ClosePDU(etherp, endp)
+	llink.link.ClosePDU(etherp, endp)
 
 	// ---------------
 	// Send the packet
 	// ---------------
-	link.outpkt <- etherp
+	llink.link.outpkt <- etherp
 
 	return nil
 }
@@ -127,11 +126,13 @@ func (e ErrIIH) Error() string {
 	return fmt.Sprintf("ErrIIH: %s", string(e))
 }
 
-// --------------------------------------------------
+//
 // RecvLANHello receives IIH from on a given LAN link
-// --------------------------------------------------
-func RecvLANHello(link *LANLink, frame *RecvFrame, payload []byte, level int, tlvs map[tlv.Type][]tlv.Data) error {
-	debug(DbgFPkt, "IIH: processign from %s", ether.Frame(frame.pkt).GetSrc())
+//
+func RecvLANHello(llink LevelLink, pdu *RecvPDU, level int) error {
+	debug(DbgFPkt, "IIH: processign from %s", pdu.src)
+
+	tlvs := pdu.tlvs
 
 	// For level 1 we must be in the same area.
 	if level == 1 {
@@ -156,8 +157,6 @@ func RecvLANHello(link *LANLink, frame *RecvFrame, payload []byte, level int, tl
 			return ErrIIH(fmt.Sprintf("TRAP areaMismatch: no matching areas"))
 		}
 	}
-	// _ == rundis
-	eframe := ether.Frame(frame.pkt)
-	link.adjdb.UpdateAdj(payload, tlvs, eframe.GetSrc())
-	return nil
+
+	return llink.UpdateAdj(pdu)
 }

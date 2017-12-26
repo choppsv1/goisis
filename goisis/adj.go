@@ -8,14 +8,14 @@ import (
 	"time"
 )
 
-// ---------------------------------------------------
+//
 // AdjState represents the state of the IS-IS adjcency
-// ---------------------------------------------------
+//
 type AdjState int
 
-// ------------------------------------------------------
+//
 // AdjState constants for the state of the IS-IS adjcency
-// ------------------------------------------------------
+//
 const (
 	AdjStateDown AdjState = iota
 	AdjStateInit
@@ -36,42 +36,40 @@ func (s AdjState) String() string {
 	return ss
 }
 
-// ---------------------------------
+//
 // Adj represents an IS-IS adjacency
-// ---------------------------------
+//
 type Adj struct {
 	State     AdjState
-	snpa      [clns.SNPALen]byte // XXX need to conditionalize this for P2P.
-	sysid     [clns.SysIDLen]byte
-	lanid     [clns.LANIDLen]byte
+	snpa      clns.SNPA // XXX need to conditionalize this for P2P.
+	sysid     clns.SystemID
+	lanID     clns.NodeID
 	areas     [][]byte
 	db        *AdjDB
-	level     int //  need to change this to circtype for p2p
-	lindex    int
+	level     clns.Level //  need to change this to circtype for p2p
 	priority  uint8
 	hold      uint16
 	holdTimer *time.Timer
 }
 
 func (a *Adj) String() string {
-	return fmt.Sprintf("Adj(%s on %s)", clns.ISOString(a.sysid[:], false), a.db.link)
+	return fmt.Sprintf("Adj(%s on %s)", clns.ISOString(a.sysid[:], false), a.db.llink)
 }
 
-// -----------------------------------------------
+//
 // NewAdj creates and initializes a new adjacency.
-// -----------------------------------------------
+//
 func NewAdj(db *AdjDB, snpa [clns.SNPALen]byte, srcid [clns.SysIDLen]byte, payload []byte, tlvs map[tlv.Type][]tlv.Data) *Adj {
 	a := &Adj{
-		State:  AdjStateDown,
-		sysid:  srcid,
-		db:     db,
-		level:  db.level,
-		lindex: db.lindex,
+		State: AdjStateDown,
+		sysid: srcid,
+		db:    db,
+		level: db.level,
 	}
 	if payload[clns.HdrCLNSPDUType] != clns.PDUTypeIIHP2P {
 		iih := payload[clns.HdrCLNSSize:]
 		a.snpa = snpa
-		copy(a.lanid[:], iih[clns.HdrIIHLANLANID:])
+		copy(a.lanID[:], iih[clns.HdrIIHLANLANID:])
 	}
 	debug(DbgFAdj, "NewAdj %s", a)
 
@@ -81,13 +79,13 @@ func NewAdj(db *AdjDB, snpa [clns.SNPALen]byte, srcid [clns.SysIDLen]byte, paylo
 	return a
 }
 
-// ----------------------------------------------------------------------------
+//
 // Update updates the adjacency with the information from the IIH, returns true
 // if DIS election should be re-run.
 //
 // Locking: We are called from AdjDB which has a lock to avoid a race with the
 // hold timer.
-// ----------------------------------------------------------------------------
+//
 func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 	rundis := false
 	iihp := payload[clns.HdrCLNSSize:]
@@ -100,7 +98,7 @@ func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 		}
 	}
 
-	if a.lindex == 0 {
+	if a.level == 1 {
 		// Update Areas
 		areas, err := tlvs[tlv.TypeAreaAddrs][0].AreaAddrsValue()
 		if err != nil {
@@ -113,7 +111,7 @@ func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 	oldstate := a.State
 	a.State = AdjStateInit
 
-	if err := a.db.link.UpdateAdjState(a, tlvs); err != nil {
+	if err := a.db.llink.UpdateAdjState(a, tlvs); err != nil {
 		return false
 	}
 
