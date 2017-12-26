@@ -18,7 +18,7 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 // operation on a LAN link.
 //
 type LANLink struct {
-	link      *LANCircuit
+	link      *CircuitLAN
 	level     clns.Level
 	lindex    clns.LIndex //  level - 1 for array indexing
 	helloInt  int
@@ -42,7 +42,7 @@ func (llink *LANLink) String() string {
 //
 // NewLANLink creates a LAN link for a given IS-IS level.
 //
-func NewLANLink(link *LANCircuit, lindex clns.LIndex, quit chan bool) *LANLink {
+func NewLANLink(link *CircuitLAN, lindex clns.LIndex, quit chan bool) *LANLink {
 	llink := &LANLink{
 		link:     link,
 		level:    clns.Level(lindex + 1),
