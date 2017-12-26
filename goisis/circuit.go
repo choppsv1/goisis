@@ -1,5 +1,7 @@
 package main
 
+// Circuits are physical interfaces in IS-IS.
+
 import (
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
