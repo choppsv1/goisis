@@ -188,6 +188,13 @@ func (c *CircuitLAN) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
 		}
 	}
 
+	tlvp := tlv.Data(pdu.payload[clns.PDUTLVOffMap[pdu.pdutype]:])
+	pdu.tlvs, err = tlvp.ParseTLV()
+	if err != nil {
+		debug(DbgFPkt, "Dropping frame on %s due to TLV error %s", c, err)
+		return nil
+	}
+
 	// XXX sanity check from == src?
 
 	return pdu
