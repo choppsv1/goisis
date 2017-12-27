@@ -1,19 +1,19 @@
 package main
 
-// ----------------------------------------
-// LinkDB is a database of links we run on.
-// ----------------------------------------
-type LinkDB struct {
+//
+// CircuitDB is a database of circuits we run on.
+//
+type CircuitDB struct {
 	links  map[string]interface{}
 	inpkts chan *RecvPDU
 }
 
-// ------------------------------------------------------
-// NewLinkDB allocate and initialize a new Link database.
-// ------------------------------------------------------
-func NewLinkDB() *LinkDB {
-	linkdb := new(LinkDB)
-	linkdb.links = make(map[string]interface{})
-	linkdb.inpkts = make(chan *RecvPDU)
-	return linkdb
+//
+// NewCircuitDB allocate and initialize a new circuit database.
+//
+func NewCircuitDB() *CircuitDB {
+	cdb := new(CircuitDB)
+	cdb.links = make(map[string]interface{})
+	cdb.inpkts = make(chan *RecvPDU)
+	return cdb
 }

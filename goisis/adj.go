@@ -53,7 +53,7 @@ type Adj struct {
 }
 
 func (a *Adj) String() string {
-	return fmt.Sprintf("Adj(%s on %s)", clns.ISOString(a.sysid[:], false), a.db.llink)
+	return fmt.Sprintf("Adj(%s on %s)", clns.ISOString(a.sysid[:], false), a.db.link)
 }
 
 //
@@ -111,7 +111,7 @@ func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 	oldstate := a.State
 	a.State = AdjStateInit
 
-	if err := a.db.llink.UpdateAdjState(a, tlvs); err != nil {
+	if err := a.db.link.UpdateAdjState(a, tlvs); err != nil {
 		return false
 	}
 

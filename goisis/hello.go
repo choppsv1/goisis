@@ -13,15 +13,15 @@ import (
 // SendLANHellos is a go routine that watches for hello timer events and sends
 // hellos when they are received.
 //
-func SendLANHellos(llink *LinkLAN, interval int, quit chan bool) error {
-	debug(DbgFPkt, "Sending hellos on %s with interval %d", llink, interval)
+func SendLANHellos(link *LinkLAN, interval int, quit chan bool) error {
+	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, interval)
 	ival := time.Second * time.Duration(interval)
 	ticker := time.NewTicker(ival) // XXX replace with jittered timer.
 	go func() {
-		sendLANHello(llink)
-		debug(DbgFPkt, "Sent initial IIH on %s entering ticker loop", llink)
+		sendLANHello(link)
+		debug(DbgFPkt, "Sent initial IIH on %s entering ticker loop", link)
 		for range ticker.C {
-			sendLANHello(llink)
+			sendLANHello(link)
 		}
 	}()
 	// Wait for quit ... do we need to do this or will the ticker stop
@@ -30,18 +30,18 @@ func SendLANHellos(llink *LinkLAN, interval int, quit chan bool) error {
 	select {
 	case <-quit:
 		ticker.Stop()
-		debug(DbgFPkt, "Stop sending IIH on %s", llink)
+		debug(DbgFPkt, "Stop sending IIH on %s", link)
 	}
 	return nil
 }
 
-func sendLANHello(llink *LinkLAN) error {
+func sendLANHello(link *LinkLAN) error {
 	var err error
 	var pdutype clns.PDUType
 
-	debug(DbgFPkt, "Sending IIH on %s", llink)
+	debug(DbgFPkt, "Sending IIH on %s", link)
 
-	if llink.level == 1 {
+	if link.level == 1 {
 		pdutype = clns.PDUTypeIIHLANL1
 	} else {
 		pdutype = clns.PDUTypeIIHLANL2
@@ -49,25 +49,25 @@ func sendLANHello(llink *LinkLAN) error {
 
 	// XXX we want the API to return payload here and later we convert frame
 	// in close so that we aren't dependent on ethernet
-	etherp, _, iihp := llink.link.OpenPDU(pdutype, clns.AllLxIS[llink.lindex])
+	etherp, _, iihp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
 
 	// ----------
 	// IIH Header
 	// ----------
 
-	iihp[clns.HdrIIHLANCircType] = uint8(llink.level)
+	iihp[clns.HdrIIHLANCircType] = uint8(link.level)
 	copy(iihp[clns.HdrIIHLANSrcID:], GlbSystemID)
 	pkt.PutUInt16(iihp[clns.HdrIIHLANHoldTime:],
-		uint16(llink.helloInt*llink.holdMult))
+		uint16(link.helloInt*link.holdMult))
 	iihp[clns.HdrIIHLANPriority] = byte(clns.DefHelloPri) & 0x7F
-	copy(iihp[clns.HdrIIHLANLANID:], llink.lanID[:])
+	copy(iihp[clns.HdrIIHLANLANID:], link.lanID[:])
 	endp := iihp[clns.HdrIIHLANSize:]
 
 	// --------
 	// Add TLVs
 	// --------
 
-	if llink.level == 1 {
+	if link.level == 1 {
 		endp, err = tlv.AddArea(endp, GlbAreaID)
 		if err != nil {
 			debug(DbgFPkt, "Error adding area TLV: %s", err)
@@ -81,7 +81,7 @@ func sendLANHello(llink *LinkLAN) error {
 		return err
 	}
 
-	addrs := llink.adjdb.GetAdjSNPA()
+	addrs := link.adjdb.GetAdjSNPA()
 	if len(addrs) > 0 {
 		t, err := tlv.Open(endp, tlv.TypeISNeighbors, nil)
 		if err != nil {
@@ -109,12 +109,12 @@ func sendLANHello(llink *LinkLAN) error {
 		}
 	}
 
-	llink.link.ClosePDU(etherp, endp)
+	link.circuit.ClosePDU(etherp, endp)
 
 	// ---------------
 	// Send the packet
 	// ---------------
-	llink.link.outpkt <- etherp
+	link.circuit.outpkt <- etherp
 
 	return nil
 }
@@ -129,7 +129,7 @@ func (e ErrIIH) Error() string {
 //
 // RecvLANHello receives IIH from on a given LAN link
 //
-func RecvLANHello(llink Link, pdu *RecvPDU, level int) error {
+func RecvLANHello(link Link, pdu *RecvPDU, level clns.Level) error {
 	debug(DbgFPkt, "IIH: processign from %s", pdu.src)
 
 	tlvs := pdu.tlvs
@@ -158,5 +158,5 @@ func RecvLANHello(llink Link, pdu *RecvPDU, level int) error {
 		}
 	}
 
-	return llink.UpdateAdj(pdu)
+	return link.UpdateAdj(pdu)
 }

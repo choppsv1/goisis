@@ -13,7 +13,7 @@ import (
 type AdjDB struct {
 	level    clns.Level
 	lindex   clns.LIndex
-	llink    Link
+	link     Link
 	lock     sync.Mutex
 	snpaMap  map[[clns.SNPALen]byte]*Adj
 	srcidMap map[[clns.SysIDLen]byte]*Adj
@@ -23,11 +23,11 @@ type AdjDB struct {
 // NewAdjDB creates and initializes a new adjacency database for a given link
 // and level.
 //
-func NewAdjDB(llink Link, lindex clns.LIndex) *AdjDB {
+func NewAdjDB(link Link, lindex clns.LIndex) *AdjDB {
 	db := &AdjDB{
 		level:    clns.Level(lindex + 1),
 		lindex:   lindex,
-		llink:    llink,
+		link:     link,
 		snpaMap:  make(map[[clns.SNPALen]byte]*Adj),
 		srcidMap: make(map[[clns.SysIDLen]byte]*Adj),
 	}
@@ -35,7 +35,7 @@ func NewAdjDB(llink Link, lindex clns.LIndex) *AdjDB {
 }
 
 func (db *AdjDB) String() string {
-	return fmt.Sprintf("AdjDB(%s)", db.llink)
+	return fmt.Sprintf("AdjDB(%s)", db.link)
 }
 
 //
@@ -120,7 +120,7 @@ func (db *AdjDB) ExpireAdj(a *Adj) {
 	}()
 
 	if rundis {
-		db.llink.DISInfoChanged()
+		db.link.DISInfoChanged()
 	}
 
 }

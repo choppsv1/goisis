@@ -18,7 +18,7 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 // operation on a LAN link.
 //
 type LinkLAN struct {
-	link      *CircuitLAN
+	circuit   *CircuitLAN
 	level     clns.Level
 	lindex    clns.LIndex //  level - 1 for array indexing
 	helloInt  int
@@ -35,16 +35,16 @@ type LinkLAN struct {
 	disElected     bool
 }
 
-func (llink *LinkLAN) String() string {
-	return fmt.Sprintf("LANLevelLink(%s level %d)", llink.link.LinkCommon, llink.level)
+func (link *LinkLAN) String() string {
+	return fmt.Sprintf("LANLevelLink(%s level %d)", link.circuit.CircuitBase, link.level)
 }
 
 //
-// NewLANLink creates a LAN link for a given IS-IS level.
+// NewLinkLAN creates a LAN link for a given IS-IS level.
 //
-func NewLANLink(link *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
-	llink := &LinkLAN{
-		link:     link,
+func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
+	link := &LinkLAN{
+		circuit:  c,
 		level:    clns.Level(lindex + 1),
 		lindex:   lindex,
 		priority: clns.DefHelloPri,
@@ -52,30 +52,30 @@ func NewLANLink(link *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
 		holdMult: clns.DefHelloMult,
 	}
 
-	llink.adjdb = NewAdjDB(llink, llink.lindex)
+	link.adjdb = NewAdjDB(link, link.lindex)
 
 	lanLinkCircuitIDs[lindex]++
-	llink.lclCircID = lanLinkCircuitIDs[lindex]
-	copy(llink.ourlanID[:], GlbSystemID)
-	llink.ourlanID[clns.SysIDLen] = llink.lclCircID
-	copy(llink.lanID[:], llink.ourlanID[:])
+	link.lclCircID = lanLinkCircuitIDs[lindex]
+	copy(link.ourlanID[:], GlbSystemID)
+	link.ourlanID[clns.SysIDLen] = link.lclCircID
+	copy(link.lanID[:], link.ourlanID[:])
 
 	// Record our SNPA in the map of our SNPA
-	ourSNPA[ether.MACKey(link.LinkCommon.intf.HardwareAddr)] = true
+	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true
 
 	// Start Sending Hellos
-	go SendLANHellos(llink, llink.helloInt, quit)
+	go SendLANHellos(link, link.helloInt, quit)
 
 	// Start DIS election routine
-	go llink.startElectingDIS()
+	go link.startElectingDIS()
 
-	return llink
+	return link
 }
 
 // ProcessPDU is called with a frame received on this link. Currently all
 // received packets are handled serially in the order they arrive (using a
 // single go routine). This could be changed in the future don't rely on it.
-func (llink *LinkLAN) ProcessPDU(pdu *RecvPDU) error {
+func (link *LinkLAN) ProcessPDU(pdu *RecvPDU) error {
 	// Validate ethernet values.
 	// var src, dst [clns.SNPALen]byte
 	level, err := pdu.pdutype.GetPDULevel()
@@ -85,21 +85,21 @@ func (llink *LinkLAN) ProcessPDU(pdu *RecvPDU) error {
 
 	switch pdu.pdutype {
 	case clns.PDUTypeIIHLANL1:
-		return RecvLANHello(llink, pdu, level-1)
+		return RecvLANHello(link, pdu, level)
 	case clns.PDUTypeIIHLANL2:
-		return RecvLANHello(llink, pdu, level-1)
+		return RecvLANHello(link, pdu, level)
 	case clns.PDUTypeLSPL1:
-		debug(DbgFPkt, "INFO: ignoring LSPL1 on %s for now", llink)
+		debug(DbgFPkt, "INFO: ignoring LSPL1 on %s for now", link)
 	case clns.PDUTypeLSPL2:
-		debug(DbgFPkt, "INFO: ignoring LSPL2 on %s for now", llink)
+		debug(DbgFPkt, "INFO: ignoring LSPL2 on %s for now", link)
 	case clns.PDUTypeCSNPL1:
-		debug(DbgFPkt, "INFO: ignoring CSNPL1 on %s for now", llink)
+		debug(DbgFPkt, "INFO: ignoring CSNPL1 on %s for now", link)
 	case clns.PDUTypeCSNPL2:
-		debug(DbgFPkt, "INFO: ignoring CSNPL2 on %s for now", llink)
+		debug(DbgFPkt, "INFO: ignoring CSNPL2 on %s for now", link)
 	case clns.PDUTypePSNPL1:
-		debug(DbgFPkt, "INFO: ignoring PSNPL1 on %s for now", llink)
+		debug(DbgFPkt, "INFO: ignoring PSNPL1 on %s for now", link)
 	case clns.PDUTypePSNPL2:
-		debug(DbgFPkt, "INFO: ignoring PSNPL2 on %s for now", llink)
+		debug(DbgFPkt, "INFO: ignoring PSNPL2 on %s for now", link)
 	}
 	return nil
 }
@@ -109,29 +109,29 @@ func (llink *LinkLAN) ProcessPDU(pdu *RecvPDU) error {
 // ===================
 
 // UpdateAdj updates an adjacency with the new PDU information.
-func (llink *LinkLAN) UpdateAdj(pdu *RecvPDU) error {
-	llink.adjdb.UpdateAdj(pdu)
+func (link *LinkLAN) UpdateAdj(pdu *RecvPDU) error {
+	link.adjdb.UpdateAdj(pdu)
 	return nil
 }
 
 //
 // ReElectDIS is a go routine that waits for events to trigger DIS reelection on
-// the llink. Initially this is a timer, and then it's based on changes in the
+// the link. Initially this is a timer, and then it's based on changes in the
 // hello process.
 //
-func (llink *LinkLAN) startElectingDIS() {
-	llink.disInfoChanged = make(chan bool)
-	dur := time.Second * time.Duration(llink.helloInt*2)
-	llink.disTimer = time.AfterFunc(dur, func() {
-		debug(DbgFDIS, "INFO: %s DIS timer expired", llink)
-		llink.disLock.Lock()
-		llink.disTimer = nil
-		llink.disLock.Unlock()
-		llink.disInfoChanged <- true
+func (link *LinkLAN) startElectingDIS() {
+	link.disInfoChanged = make(chan bool)
+	dur := time.Second * time.Duration(link.helloInt*2)
+	link.disTimer = time.AfterFunc(dur, func() {
+		debug(DbgFDIS, "INFO: %s DIS timer expired", link)
+		link.disLock.Lock()
+		link.disTimer = nil
+		link.disLock.Unlock()
+		link.disInfoChanged <- true
 	})
-	for range llink.disInfoChanged {
-		debug(DbgFDIS, "INFO: %s Received disInfoChanged notification", llink)
-		llink.disElect()
+	for range link.disInfoChanged {
+		debug(DbgFDIS, "INFO: %s Received disInfoChanged notification", link)
+		link.disElect()
 	}
 }
 
@@ -139,18 +139,18 @@ func (llink *LinkLAN) startElectingDIS() {
 // DISInfoChanged is called when something has happened to require rerunning of
 // DIS election on this LAN.
 //
-func (llink *LinkLAN) DISInfoChanged() {
-	llink.disLock.Lock()
-	defer llink.disLock.Unlock()
-	if llink.disTimer == nil {
-		llink.disInfoChanged <- true
+func (link *LinkLAN) DISInfoChanged() {
+	link.disLock.Lock()
+	defer link.disLock.Unlock()
+	if link.disTimer == nil {
+		link.disInfoChanged <- true
 	}
 }
 
 //
 // UpdateAdjState updates the adj state according to the TLV found in the IIH
 //
-func (llink *LinkLAN) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error {
+func (link *LinkLAN) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error {
 	// Walk neighbor TLVs if we see ourselves mark adjacency Up.
 	for _, ntlv := range tlvs[tlv.TypeISNeighbors] {
 		addrs, err := ntlv.ISNeighborsValue()
@@ -159,7 +159,7 @@ func (llink *LinkLAN) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error
 			return err
 		}
 		for _, snpa := range addrs {
-			if bytes.Equal(snpa, llink.link.getOurSNPA()) {
+			if bytes.Equal(snpa, link.circuit.getOurSNPA()) {
 				a.State = AdjStateUp
 				break
 			}
@@ -180,56 +180,56 @@ func (llink *LinkLAN) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error
 //
 // Locking: called with adjdb locked
 //
-func (llink *LinkLAN) disFindBest() (bool, *Adj) {
-	electPri := llink.priority
+func (link *LinkLAN) disFindBest() (bool, *Adj) {
+	electPri := link.priority
 	electID := GlbSystemID
 	var elect *Adj
 	count := 0
-	for _, a := range llink.adjdb.srcidMap {
+	for _, a := range link.adjdb.srcidMap {
 		if a.State != AdjStateUp {
-			debug(DbgFDIS, "%s skipping non-up adj %s", llink, a)
+			debug(DbgFDIS, "%s skipping non-up adj %s", link, a)
 			continue
 		}
 		count++
 		if a.priority > electPri {
-			debug(DbgFDIS, "%s adj %s better priority %d", llink, a, a.priority)
+			debug(DbgFDIS, "%s adj %s better priority %d", link, a, a.priority)
 			elect = a
 			electPri = a.priority
 			electID = a.sysid[:]
 		} else if a.priority == electPri {
-			debug(DbgFDIS, "%s adj %s same priority %d", llink, a, a.priority)
+			debug(DbgFDIS, "%s adj %s same priority %d", link, a, a.priority)
 			if bytes.Compare(a.sysid[:], electID) > 0 {
 				elect = a
 				electPri = a.priority
 				electID = a.sysid[:]
 			}
 		} else {
-			debug(DbgFDIS, "%s adj %s worse priority %d", llink, a, a.priority)
+			debug(DbgFDIS, "%s adj %s worse priority %d", link, a, a.priority)
 		}
 	}
 	if count == 0 {
-		debug(DbgFDIS, "%s no adj, no dis", llink)
+		debug(DbgFDIS, "%s no adj, no dis", link)
 		// No adjacencies, no DIS
 		return false, nil
 	}
 	return elect == nil, elect
 }
 
-func (llink *LinkLAN) disElect() {
-	debug(DbgFDIS, "Running DIS election on %s", llink)
+func (link *LinkLAN) disElect() {
+	debug(DbgFDIS, "Running DIS election on %s", link)
 
-	llink.adjdb.lock.Lock()
-	defer llink.adjdb.lock.Unlock()
+	link.adjdb.lock.Lock()
+	defer link.adjdb.lock.Unlock()
 
 	var newLANID clns.NodeID
-	oldLANID := llink.lanID
+	oldLANID := link.lanID
 
-	electUs, electOther := llink.disFindBest()
+	electUs, electOther := link.disFindBest()
 	if electUs {
-		debug(DbgFDIS, "%s electUS", llink)
-		newLANID = llink.ourlanID
+		debug(DbgFDIS, "%s electUS", link)
+		newLANID = link.ourlanID
 	} else if electOther != nil {
-		debug(DbgFDIS, "%s electOther %s", llink, electOther)
+		debug(DbgFDIS, "%s electOther %s", link, electOther)
 		newLANID = electOther.lanID
 	}
 
@@ -241,18 +241,18 @@ func (llink *LinkLAN) disElect() {
 	debug(DbgFDIS, "DIS change: old %s new %s", oldLANID, newLANID)
 
 	if !electUs {
-		if llink.disElected {
-			llink.disElected = false
+		if link.disElected {
+			link.disElected = false
 			// XXX perform DIS resign duties
 		}
 		if electOther == nil {
 			// XXX No DIS
-			llink.lanID = llink.ourlanID
+			link.lanID = link.ourlanID
 		} else {
-			llink.lanID = newLANID
+			link.lanID = newLANID
 		}
-	} else if !llink.disElected {
-		llink.disElected = true
+	} else if !link.disElected {
+		link.disElected = true
 		// XXX start new DIS duties
 	}
 	// XXX Update Process: signal DIS change

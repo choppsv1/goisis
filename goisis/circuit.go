@@ -117,7 +117,7 @@ func (common *CircuitBase) writePackets() {
 //
 // NewCircuitBase allocates and initializes a new CircuitBase structure.
 //
-func NewCircuitBase(link Circuit, ifname string, inpkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
+func NewCircuitBase(link Circuit, ifname string, inpkt chan<- *RecvPDU, quit chan bool, filter []bpf.RawInstruction) (*CircuitBase, error) {
 	var err error
 
 	common := &CircuitBase{
@@ -134,27 +134,6 @@ func NewCircuitBase(link Circuit, ifname string, inpkt chan<- *RecvPDU, quit cha
 	// Get raw socket connection for interface send/receive
 
 	common.sock, err = raw.NewInterfaceSocket(common.intf.Name)
-	if err != nil {
-		return nil, err
-	}
-
-	// IS-IS BPF filter
-	filter, err := bpf.Assemble([]bpf.Instruction{
-		// 0: Load 2 bytes from offset 12 (ethertype)
-		bpf.LoadAbsolute{Off: 12, Size: 2},
-		// 1: Jump fwd + 1 if 0x8870 (jumbo) otherwise fwd + 0 (continue)
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x8870, SkipTrue: 1},
-		// 2: Jump fwd + 3 if > 1500 (drop non-IEEE 802.2 LLC) otherwise fwd + 0 (continue)
-		bpf.JumpIf{Cond: bpf.JumpGreaterThan, Val: 1500, SkipTrue: 3},
-		// 3: Load 2 bytes from offset 14 (llc src, dst)
-		bpf.LoadAbsolute{Off: 14, Size: 2},
-		// 4: Jump fwd + 0 if 0xfefe (keep) otherwise fwd + 1 (drop)
-		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: 0xfefe, SkipTrue: 1},
-		// 5: Keep
-		bpf.RetConstant{Val: 0xffff},
-		// 6: Drop
-		bpf.RetConstant{Val: 0},
-	})
 	if err != nil {
 		return nil, err
 	}

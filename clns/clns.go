@@ -231,15 +231,15 @@ var PDUTLVOffMap = map[PDUType]int{
 //
 // PDULevelMap maps PDU types to levels (if possible).
 //
-var PDULevelMap = map[PDUType]int{
-	PDUTypeIIHLANL1: 1,
-	PDUTypeIIHLANL2: 2,
-	PDUTypeLSPL1:    1,
-	PDUTypeLSPL2:    2,
-	PDUTypeCSNPL1:   1,
-	PDUTypeCSNPL2:   2,
-	PDUTypePSNPL1:   1,
-	PDUTypePSNPL2:   2,
+var PDULevelMap = map[PDUType]Level{
+	PDUTypeIIHLANL1: Level(1),
+	PDUTypeIIHLANL2: Level(2),
+	PDUTypeLSPL1:    Level(1),
+	PDUTypeLSPL2:    Level(2),
+	PDUTypeCSNPL1:   Level(1),
+	PDUTypeCSNPL2:   Level(2),
+	PDUTypePSNPL1:   Level(1),
+	PDUTypePSNPL2:   Level(2),
 }
 
 //
@@ -251,7 +251,7 @@ type LevelFlag int
 // Level Flags
 //
 const (
-	L1Flag = 1 << iota
+	L1Flag LevelFlag = 1 << iota
 	L2Flag
 )
 
@@ -384,7 +384,7 @@ func GetPDUType(payload []byte) (PDUType, error) {
 //
 // GetPDULevel returns the level of the PDU type or an error if not level based.
 //
-func (pdutype PDUType) GetPDULevel() (int, error) {
+func (pdutype PDUType) GetPDULevel() (Level, error) {
 
 	level, ok := PDULevelMap[pdutype]
 	if !ok {

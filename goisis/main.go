@@ -44,7 +44,7 @@ func main() {
 	GlbAreaID = make([]byte, 1)
 	GlbAreaID[0] = 0x00
 
-	linkdb := NewLinkDB()
+	cdb := NewCircuitDB()
 	quit := make(chan bool)
 
 	// Get interfaces to run on.
@@ -52,15 +52,15 @@ func main() {
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		var lanlink *CircuitLAN
-		lanlink, err = NewLANCircuit(ifname, linkdb.inpkts, quit, 1)
+		lanlink, err = NewCircuitLAN(ifname, cdb.inpkts, quit, 1)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating link: %s", err)
 			os.Exit(1)
 		}
-		linkdb.links[ifname] = lanlink
+		cdb.links[ifname] = lanlink
 	}
 
-	processPackets(linkdb)
+	processPackets(cdb)
 	close(quit)
 }
 
@@ -68,10 +68,10 @@ func main() {
 // processPackets handles all incoming packets (frames) serially. If performance
 // is an issue we could parallelize this based on packet type etc..
 // -----------------------------------------------------------------------------
-func processPackets(linkdb *LinkDB) {
+func processPackets(cdb *CircuitDB) {
 	for {
 		select {
-		case pdu := <-linkdb.inpkts:
+		case pdu := <-cdb.inpkts:
 			err := pdu.link.ProcessPDU(pdu)
 			if err != nil {
 				debug(DbgFPkt, "Error processing packet: %s\n", err)
