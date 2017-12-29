@@ -72,38 +72,6 @@ func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
 	return link
 }
 
-// ProcessPDU is called with a frame received on this link. Currently all
-// received packets are handled serially in the order they arrive (using a
-// single go routine). This could be changed in the future don't rely on it.
-func (link *LinkLAN) ProcessPDU(pdu *RecvPDU) error {
-	// Validate ethernet values.
-	// var src, dst [clns.SNPALen]byte
-	level, err := pdu.pdutype.GetPDULevel()
-	if err != nil {
-		return err
-	}
-
-	switch pdu.pdutype {
-	case clns.PDUTypeIIHLANL1:
-		return RecvLANHello(link, pdu, level)
-	case clns.PDUTypeIIHLANL2:
-		return RecvLANHello(link, pdu, level)
-	case clns.PDUTypeLSPL1:
-		debug(DbgFPkt, "INFO: ignoring LSPL1 on %s for now", link)
-	case clns.PDUTypeLSPL2:
-		debug(DbgFPkt, "INFO: ignoring LSPL2 on %s for now", link)
-	case clns.PDUTypeCSNPL1:
-		debug(DbgFPkt, "INFO: ignoring CSNPL1 on %s for now", link)
-	case clns.PDUTypeCSNPL2:
-		debug(DbgFPkt, "INFO: ignoring CSNPL2 on %s for now", link)
-	case clns.PDUTypePSNPL1:
-		debug(DbgFPkt, "INFO: ignoring PSNPL1 on %s for now", link)
-	case clns.PDUTypePSNPL2:
-		debug(DbgFPkt, "INFO: ignoring PSNPL2 on %s for now", link)
-	}
-	return nil
-}
-
 // ===================
 // Adjacency Functions
 // ===================

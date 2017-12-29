@@ -9,7 +9,6 @@ import (
 	"github.com/choppsv1/goisis/raw"
 	"github.com/choppsv1/goisis/tlv"
 	"golang.org/x/net/bpf"
-	"io"
 	"net"
 	"syscall"
 )
@@ -18,10 +17,14 @@ import (
 // Circuit is an IS-IS/CLNS physical interface.
 //
 type Circuit interface {
+	ClosePDU(ether.Frame, []byte) error
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
+	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte)
 }
 
-// Link is an represents level dependent operations on a circuit.
+//
+// Link represents level dependent operations on a circuit.
+//
 type Link interface {
 	DISInfoChanged()
 	ProcessPDU(*RecvPDU) error
@@ -29,23 +32,28 @@ type Link interface {
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
 }
 
+// PDU is a type that holds a valid IS-IS PDU.
+type PDU struct {
+	payload []byte
+	pdutype clns.PDUType
+	level   clns.Level
+	tlvs    map[tlv.Type][]tlv.Data
+}
+
 //
 // RecvPDU is a type passed by value for handling frames after some
 // validation/baking.
 type RecvPDU struct {
-	payload []byte
-	pdutype clns.PDUType
-	tlvs    map[tlv.Type][]tlv.Data
-	link    Link
-	src     net.HardwareAddr
-	dst     net.HardwareAddr
+	PDU
+	link Link
+	src  net.HardwareAddr
+	dst  net.HardwareAddr
 }
 
 //
 // CircuitBase collects common functionality from all types of circuits
 //
 type CircuitBase struct {
-	link   Circuit
 	intf   *net.Interface
 	sock   raw.IntfSocket
 	inpkt  chan<- *RecvPDU
@@ -53,99 +61,38 @@ type CircuitBase struct {
 	quit   <-chan bool
 }
 
-func (common *CircuitBase) String() string {
-	return fmt.Sprintf("Link(%s)", common.intf.Name)
-}
-
-// readPackets is a go routine to read packets from link and input to channel.
-func (common *CircuitBase) readPackets() {
-	debug(DbgFPkt, "Starting to read packets on %s\n", common)
-	for {
-		pkt, from, err := common.sock.ReadPacket()
-		if err != nil {
-			if err == io.EOF {
-				debug(DbgFPkt, "EOF reading from %s, will stop reading from link\n", common)
-				return
-			}
-			debug(DbgFPkt, "Error reading from link %s: %s\n", common.intf.Name, err)
-			continue
-		}
-		// debug(DbgFPkt, "Read packet on %s len(%d)\n", common.link, len(frame.pkt))
-
-		// Do Frame Validation and get PDU.
-		pdu := common.link.FrameToPDU(pkt, from)
-		if pdu == nil {
-			continue
-		}
-
-		pdu.payload, err = clns.ValidatePDU(pdu.payload)
-		if err != nil {
-			continue
-		}
-
-		common.inpkt <- pdu
-	}
-}
-
-// writePackets is a go routine to read packets from a channel and output to link.
-func (common *CircuitBase) writePackets() {
-	debug(DbgFPkt, "Starting to write packets on %s\n", common)
-	for {
-		debug(DbgFPkt, "XXX select in writePackets")
-		select {
-		case pkt := <-common.outpkt:
-			addr := ether.Frame(pkt).GetDst()
-			debug(DbgFPkt, "[socket] <- len %d from link channel %s to %s\n",
-				len(pkt),
-				common.intf.Name,
-				addr)
-			n, err := common.sock.WritePacket(pkt, addr)
-			if err != nil {
-				debug(DbgFPkt, "Error writing packet to %s: %s\n",
-					common.intf.Name, err)
-			} else {
-				debug(DbgFPkt, "Wrote packet len %d/%d to %s\n",
-					len(pkt), n, common.intf.Name)
-			}
-		case <-common.quit:
-			debug(DbgFPkt, "Got quit signal for %s, will stop writing to link\n", common)
-			return
-		}
-	}
+func (base *CircuitBase) String() string {
+	return fmt.Sprintf("CircuitBase(%s)", base.intf.Name)
 }
 
 //
 // NewCircuitBase allocates and initializes a new CircuitBase structure.
 //
-func NewCircuitBase(link Circuit, ifname string, inpkt chan<- *RecvPDU, quit chan bool, filter []bpf.RawInstruction) (*CircuitBase, error) {
+func NewCircuitBase(ifname string, inpkt chan<- *RecvPDU, quit chan bool, filter []bpf.RawInstruction) (*CircuitBase, error) {
 	var err error
 
-	common := &CircuitBase{
-		link:   link,
+	base := &CircuitBase{
 		inpkt:  inpkt,
 		outpkt: make(chan []byte),
 		quit:   quit,
 	}
 
-	common.intf, err = net.InterfaceByName(ifname)
+	base.intf, err = net.InterfaceByName(ifname)
 	if err != nil {
 		return nil, err
 	}
 	// Get raw socket connection for interface send/receive
 
-	common.sock, err = raw.NewInterfaceSocket(common.intf.Name)
+	base.sock, err = raw.NewInterfaceSocket(base.intf.Name)
 	if err != nil {
 		return nil, err
 	}
 
-	err = common.sock.SetBPF(filter)
+	err = base.sock.SetBPF(filter)
 	if err != nil {
 		fmt.Printf("Error setting filter: %s\n", err)
 		return nil, err
 	}
 
-	go common.readPackets()
-	go common.writePackets()
-
-	return common, nil
+	return base, nil
 }

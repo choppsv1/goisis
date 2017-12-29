@@ -3,6 +3,7 @@ package clns
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/pkt"
 	"net"
 	"strings"
@@ -16,11 +17,7 @@ import (
 // ISO 10589 CLNS header offset values.
 // ------------------------------------
 const (
-	HdrLLCSSAP = iota // 802.2 LLC header offset values
-	HdrLLCDSAP        // 802.2 LLC header offset values
-	HdrLLCCTRL        // 802.2 LLC header offset values
-
-	HdrCLNSIDRP
+	HdrCLNSIDRP = iota
 	HdrCLNSLen
 	HdrCLNSVer
 	HdrCLNSSysIDLen
@@ -30,9 +27,6 @@ const (
 	HdrCLNSMaxArea
 	HdrCLNSSize
 )
-
-// HdrLLCSize is the size of the LLC header we use.
-const HdrLLCSize = 3
 
 // ---------------------------
 // IIH - Common header offsets
@@ -85,8 +79,10 @@ const (
 //
 // LSP Flags
 //
+type LSPFlags uint8
+
 const (
-	_ = 1 << iota
+	_ LSPFlags = 1 << iota
 	_
 	LSPFOverload
 	LSPFMetDef
@@ -120,6 +116,7 @@ const (
 // Protocol constants for various headers and structures.
 // ======================================================
 const (
+	LLCSAP         = 0xfefe
 	LLCSSAP        = 0xfe
 	LLCDSAP        = 0xfe
 	LLCControl     = 3
@@ -135,6 +132,7 @@ const (
 	LSPPNodeIDOff  = 6
 	LSPSegmentOff  = 7
 	MaxAge         = 1200
+	ZeroMaxAge     = 60
 	LSPRecvBufSize = 1492
 	DefHelloInt    = 10
 	DefHelloMult   = 3
@@ -175,6 +173,12 @@ func (typ PDUType) String() string {
 	return fmt.Sprintf("%d", typ)
 }
 
+type ErrNonISISSAP uint16
+
+func (e ErrNonISISSAP) Error() string {
+	return fmt.Sprintf("Wrong ISIS LLC SAP %#04v", uint16(e))
+}
+
 // ErrUnkPDUType is returned when an unknown PDU type is encountered
 type ErrUnkPDUType uint8
 
@@ -186,15 +190,15 @@ func (e ErrUnkPDUType) Error() string {
 // HdrLenMap map PDU type to header lengths
 //
 var HdrLenMap = map[PDUType]uint8{
-	PDUTypeIIHLANL1: HdrCLNSSize + HdrIIHLANSize - HdrLLCSize,
-	PDUTypeIIHLANL2: HdrCLNSSize + HdrIIHLANSize - HdrLLCSize,
-	PDUTypeIIHP2P:   HdrCLNSSize + HdrIIHP2PSize - HdrLLCSize,
-	PDUTypeLSPL1:    HdrCLNSSize + HdrLSPSize - HdrLLCSize,
-	PDUTypeLSPL2:    HdrCLNSSize + HdrLSPSize - HdrLLCSize,
-	PDUTypeCSNPL1:   HdrCLNSSize + HdrCSNPSize - HdrLLCSize,
-	PDUTypeCSNPL2:   HdrCLNSSize + HdrCSNPSize - HdrLLCSize,
-	PDUTypePSNPL1:   HdrCLNSSize + HdrPSNPSize - HdrLLCSize,
-	PDUTypePSNPL2:   HdrCLNSSize + HdrPSNPSize - HdrLLCSize,
+	PDUTypeIIHLANL1: HdrCLNSSize + HdrIIHLANSize,
+	PDUTypeIIHLANL2: HdrCLNSSize + HdrIIHLANSize,
+	PDUTypeIIHP2P:   HdrCLNSSize + HdrIIHP2PSize,
+	PDUTypeLSPL1:    HdrCLNSSize + HdrLSPSize,
+	PDUTypeLSPL2:    HdrCLNSSize + HdrLSPSize,
+	PDUTypeCSNPL1:   HdrCLNSSize + HdrCSNPSize,
+	PDUTypeCSNPL2:   HdrCLNSSize + HdrCSNPSize,
+	PDUTypePSNPL1:   HdrCLNSSize + HdrPSNPSize,
+	PDUTypePSNPL2:   HdrCLNSSize + HdrPSNPSize,
 }
 
 //
@@ -353,10 +357,10 @@ func ISOString(iso []byte, extratail bool) string {
 }
 
 //
-// ISODecode returns a byte slice of the hexidecimal string value given in "ISO"
+// ISOEncode returns a byte slice of the hexidecimal string value given in "ISO"
 // form
 //
-func ISODecode(isos string) (iso []byte, err error) {
+func ISOEncode(isos string) (iso []byte, err error) {
 	isos = strings.Replace(isos, ".", "", -1)
 	iso, err = hex.DecodeString(isos)
 	return
@@ -403,37 +407,43 @@ func (e ErrInvalidPacket) Error() string {
 	return fmt.Sprintf("ErrInvalidPacket: %s", string(e))
 }
 
-// ValidatePacket validates (to an extent) a CLNS payload, and returns a correct
+// ValidatePDU validates (to an extent) a CLNS payload, and returns a correct
 // version of it. (ISO10589 8.4.2.1)
 // Checked Valid Items:  PDU Type, Header Length, PDU Length, Advertised
 // versions(*), Advertised sizes(*) -- (*) XXX finish
-func ValidatePDU(payload []byte) ([]byte, error) {
+func ValidatePDU(llc, payload []byte) ([]byte, PDUType, error) {
+	// Should not be dependent on circuit type -- move to CLNS
+	sap := pkt.GetUInt16(llc[0:2])
+	if sap != LLCSAP {
+		return nil, 0, ErrNonISISSAP(sap)
+	}
+
 	pdutype, err := GetPDUType(payload)
 	if err != nil {
-		return nil, err
+		return nil, pdutype, err
 	}
 
 	if HdrLenMap[pdutype] != payload[HdrCLNSLen] {
-		return nil, ErrInvalidPacket(
+		return nil, pdutype, ErrInvalidPacket(
 			fmt.Sprintf("header length mismatch, expected %d got %d", HdrLenMap[pdutype], payload[HdrCLNSLen]))
 	}
 
 	off := PDULenOffMap[pdutype]
 	pdulen := pkt.GetUInt16(payload[off:])
-	if int(pdulen)+HdrLLCSize > len(payload) {
-		return nil, ErrInvalidPacket(
+	if int(pdulen) > len(payload) {
+		return nil, pdutype, ErrInvalidPacket(
 			fmt.Sprintf("pdulen %d greater than payload %d", pdulen, len(payload)))
 	}
-	if pdulen+14 < 46 {
-		return nil, ErrInvalidPacket("pdulen < 46")
+	if pdulen+ether.HdrLLCSize+ether.HdrEthSize < 46 {
+		return nil, pdutype, ErrInvalidPacket("ether < 46")
 	}
-	if int(pdulen+HdrLLCSize) < len(payload) {
+	if int(pdulen) < len(payload) {
 		// Don't log padded short frames
 		if pdulen > 35 {
 			fmt.Printf("payload %d larger than pdulen %d(+3) trimming\n",
 				len(payload), pdulen)
 		}
-		payload = payload[:pdulen+HdrLLCSize]
+		payload = payload[:pdulen]
 	}
-	return payload, nil
+	return payload, pdutype, nil
 }

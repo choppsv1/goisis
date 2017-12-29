@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
@@ -9,7 +8,6 @@ import (
 	"github.com/choppsv1/goisis/tlv"
 	"golang.org/x/net/bpf"
 	"net"
-	"syscall"
 )
 
 // ourSNPA keeps track of all of our SNPA to check for looped back frames
@@ -63,7 +61,7 @@ func NewCircuitLAN(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf 
 		return nil, err
 	}
 
-	c.CircuitBase, err = NewCircuitBase(c, ifname, inpkt, quit, filter)
+	c.CircuitBase, err = NewCircuitBase(ifname, inpkt, quit, filter)
 	if err != nil {
 		return nil, err
 	}
@@ -76,6 +74,9 @@ func NewCircuitLAN(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf 
 			c.levlink[i] = NewLinkLAN(c, clns.LIndex(i), quit)
 		}
 	}
+
+	go c.readPackets(c)
+	go c.writePackets()
 
 	return c, nil
 }
@@ -116,86 +117,18 @@ func (c *CircuitLAN) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.
 //
 func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) error {
 	ethlen := tlv.GetOffset([]byte(etherp), endp)
-	payload := ethlen - ether.HdrEthSize
-	pdulen := payload - clns.HdrLLCSize
-	pdutype := etherp[ether.HdrEthSize+clns.HdrCLNSPDUType]
-	lenoff := clns.PDULenOffMap[clns.PDUType(pdutype)]
+	epayloadlen := ethlen - ether.HdrEthSize
+	pdutype := etherp[ether.HdrEthSize+ether.HdrLLCSize+clns.HdrCLNSPDUType]
 
 	// Calculate the packet size and fill in various places
-	lenoff = ether.HdrEthSize + lenoff
-	pkt.PutUInt16(etherp[lenoff:], uint16(pdulen))
+	elenoff := ether.HdrEthSize + clns.PDULenOffMap[clns.PDUType(pdutype)]
+	pdulen := epayloadlen - ether.HdrLLCSize
+	pkt.PutUInt16(etherp[elenoff:], uint16(pdulen))
 
-	etherp = etherp[0 : payload+ether.HdrEthSize]
-	etherp.SetTypeLen(payload)
+	etherp = etherp[0 : epayloadlen+ether.HdrEthSize]
+	etherp.SetTypeLen(epayloadlen)
 
 	debug(DbgFPkt, "Closing PDU with pdulen %d payload %d framelen %d",
-		pdulen, payload, len(etherp))
+		pdulen, epayloadlen, len(etherp))
 	return nil
-}
-
-// =================
-// Packet Processing
-// =================
-
-// FrameToPDU is called to validate the frame per circuit type and return the
-// pdu payload. This will be called in the context of the packet read loop so be fast.
-func (c *CircuitLAN) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
-	var err error
-
-	eframe := ether.Frame(frame)
-
-	pdu := &RecvPDU{
-		dst: eframe.GetDst(),
-		src: eframe.GetSrc(),
-	}
-
-	debug(DbgFPkt, " <- len %d from circuit %s to %s from %s llclen %d\n",
-		len(frame), c.intf.Name, pdu.dst, pdu.src, eframe.GetTypeLen())
-
-	pdu.payload, err = eframe.ValidateFrame(ourSNPA)
-	if err != nil {
-		if err == ether.ErrOurFrame(true) {
-			debug(DbgFPkt, "Dropping our own frame")
-		} else {
-			debug(DbgFPkt, "Dropping frame due to error: %s", err)
-		}
-		return nil
-	}
-
-	if pdu.pdutype, err = clns.GetPDUType(pdu.payload); err != nil {
-		logger.Printf("Dropping IS-IS frame due to error: %s", err)
-		return nil
-	}
-
-	level, err := pdu.pdutype.GetPDULevel()
-	if err != nil {
-		debug(DbgFPkt, "Dropping frame due to error: %s", err)
-		return nil
-	}
-
-	pdu.link = c.levlink[level-1]
-	if pdu.link == nil {
-		debug(DbgFPkt, "Dropping frame as L%s not enabled on %s", level, c)
-		return nil
-	}
-
-	// Check for expected ether dst (correct mcast or us)
-	if !bytes.Equal(pdu.dst, clns.AllLxIS[level-1]) {
-		if !bytes.Equal(pdu.dst, c.getOurSNPA()) {
-
-			logger.Printf("Dropping IS-IS frame to non-IS-IS address, exciting extensions in use!?")
-			return nil
-		}
-	}
-
-	tlvp := tlv.Data(pdu.payload[clns.PDUTLVOffMap[pdu.pdutype]:])
-	pdu.tlvs, err = tlvp.ParseTLV()
-	if err != nil {
-		debug(DbgFPkt, "Dropping frame on %s due to TLV error %s", c, err)
-		return nil
-	}
-
-	// XXX sanity check from == src?
-
-	return pdu
 }

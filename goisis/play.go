@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/choppsv1/goisis/tlv"
 	"reflect"
+	"time"
 )
 
 type addr []byte
@@ -45,4 +46,10 @@ func playground() {
 
 	typ = typ.Elem()
 	fmt.Printf("**typ type: %s\n", typ.String())
+
+	val := 0x132
+	fmt.Printf("%#08x %#04x\n", val, val)
+
+	dur := time.Duration(3200001) * time.Nanosecond
+	fmt.Printf("%v\n", dur)
 }

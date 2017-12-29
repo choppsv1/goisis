@@ -24,6 +24,9 @@ var GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS
 
 // var GlbDebug DbgFlag
 
+// GlbCDB is the global circuit DB for this instance
+var GlbCDB = NewCircuitDB()
+
 func main() {
 	var err error
 
@@ -38,13 +41,12 @@ func main() {
 		return
 	}
 
-	GlbSystemID, err = clns.ISODecode(*sysIDPtr)
+	GlbSystemID, err = clns.ISOEncode(*sysIDPtr)
 
 	// XXX eventually support custom areas
 	GlbAreaID = make([]byte, 1)
 	GlbAreaID[0] = 0x00
 
-	cdb := NewCircuitDB()
 	quit := make(chan bool)
 
 	// Get interfaces to run on.
@@ -52,30 +54,14 @@ func main() {
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		var lanlink *CircuitLAN
-		lanlink, err = NewCircuitLAN(ifname, cdb.inpkts, quit, 1)
+		lanlink, err = NewCircuitLAN(ifname, GlbCDB.inpkts, quit, 1)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating link: %s", err)
 			os.Exit(1)
 		}
-		cdb.links[ifname] = lanlink
+		GlbCDB.links[ifname] = lanlink
 	}
 
-	processPackets(cdb)
+	processPDUs(GlbCDB)
 	close(quit)
-}
-
-// -----------------------------------------------------------------------------
-// processPackets handles all incoming packets (frames) serially. If performance
-// is an issue we could parallelize this based on packet type etc..
-// -----------------------------------------------------------------------------
-func processPackets(cdb *CircuitDB) {
-	for {
-		select {
-		case pdu := <-cdb.inpkts:
-			err := pdu.link.ProcessPDU(pdu)
-			if err != nil {
-				debug(DbgFPkt, "Error processing packet: %s\n", err)
-			}
-		}
-	}
 }

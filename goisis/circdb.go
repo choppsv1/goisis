@@ -17,3 +17,6 @@ func NewCircuitDB() *CircuitDB {
 	cdb.inpkts = make(chan *RecvPDU)
 	return cdb
 }
+
+func (cdb *CircuitDB) SetAllSRM(lsp *LSPSegment) {
+}
