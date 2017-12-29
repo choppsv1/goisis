@@ -63,5 +63,6 @@ func main() {
 	}
 
 	processPDUs(GlbCDB)
+
 	close(quit)
 }
