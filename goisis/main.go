@@ -27,6 +27,9 @@ var GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS
 // GlbCDB is the global circuit DB for this instance
 var GlbCDB = NewCircuitDB()
 
+// GlbQuit is a channel to signal go routines should end
+var GlbQuit = make(chan bool)
+
 func main() {
 	var err error
 

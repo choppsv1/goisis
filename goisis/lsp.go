@@ -13,6 +13,8 @@ import (
 type LSPSegment struct {
 	pdu          PDU
 	hdr          []byte
+	lspid        clns.LSPID
+	lindex       clns.LIndex
 	lifetime     *Holdtime
 	zeroLifetime *Holdtime
 	holdTimer    *time.Timer
@@ -34,9 +36,11 @@ func NewLSPSegment(pdu *PDU) (*LSPSegment, error) {
 	hdr := pdu.payload[clns.HdrCLNSSize:]
 	hdr = hdr[:clns.HdrLSPSize]
 	lsp := &LSPSegment{
-		pdu: *pdu,
-		hdr: hdr,
+		pdu:    *pdu,
+		hdr:    hdr,
+		lindex: pdu.pdutype.GetPDULIndex(),
 	}
+	copy(lsp.lspid[:], hdr[clns.HdrLSPLSPID:])
 	lifetime := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
 	lsp.lifetime = NewHoldtime(lifetime)
 	lsp.holdTimer = time.AfterFunc(lsp.lifetime.TimeLeft(), lsp.expireLSP)

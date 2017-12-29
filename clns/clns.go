@@ -77,10 +77,11 @@ const (
 )
 
 //
-// LSP Flags
+// LSPFlags are defined in ISO10589:2002 XXX
 //
 type LSPFlags uint8
 
+// The LSP Flags
 const (
 	_ LSPFlags = 1 << iota
 	_
@@ -168,11 +169,12 @@ const (
 	PDUTypePSNPL2           = 27
 )
 
-func (typ PDUType) String() string {
+func (pdutype PDUType) String() string {
 	// XXX add nice map with strings
-	return fmt.Sprintf("%d", typ)
+	return fmt.Sprintf("%d", pdutype)
 }
 
+// ErrNonISISSAP indicates the frame isn't an IS-IS frame
 type ErrNonISISSAP uint16
 
 func (e ErrNonISISSAP) Error() string {
@@ -395,6 +397,14 @@ func (pdutype PDUType) GetPDULevel() (Level, error) {
 		return 0, fmt.Errorf("%s is not a level based PDU type", pdutype)
 	}
 	return level, nil
+}
+
+//
+// GetPDULIndex returns the level index of the PDU type assumes the type is valid
+//
+func (pdutype PDUType) GetPDULIndex() LIndex {
+
+	return LIndex(PDULevelMap[pdutype] - 1)
 }
 
 //

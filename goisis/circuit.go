@@ -49,16 +49,6 @@ type Circuit interface {
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte)
 }
 
-//
-// Link represents level dependent operations on a circuit.
-//
-type Link interface {
-	DISInfoChanged()
-	ProcessPDU(*RecvPDU) error
-	UpdateAdj(*RecvPDU) error
-	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
-}
-
 // -----
 // Types
 // -----

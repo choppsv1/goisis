@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/choppsv1/goisis/tlv"
 	"reflect"
+	//"sync"
 	"time"
 )
 
@@ -52,4 +53,30 @@ func playground() {
 
 	dur := time.Duration(3200001) * time.Nanosecond
 	fmt.Printf("%v\n", dur)
+
+	// // Signals are tossed if no-one is waiting.
+	// // can be seen by removing or adding the sleep
+	// lock := sync.Mutex{}
+	// cond := sync.NewCond(&lock)
+	// wg := sync.WaitGroup{}
+	// wg.Add(2)
+
+	// condfunc := func() {
+	// 	for i := 0; i < 10; i++ {
+	// 		cond.L.Lock()
+	// 		cond.Wait()
+	// 		fmt.Printf("Cond Awoke: %d\n", i)
+	// 		cond.L.Unlock()
+	// 	}
+	// 	fmt.Printf("Cond Done\n")
+	// 	wg.Done()
+	// }
+	// go condfunc()
+	// go condfunc()
+	// for i := 0; i < 20; i++ {
+	// 	time.Sleep(time.Millisecond * 100)
+	// 	fmt.Printf("Sending Signal %d\n", i)
+	// 	cond.Signal()
+	// }
+	// wg.Wait()
 }

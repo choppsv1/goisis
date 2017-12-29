@@ -16,6 +16,7 @@ const (
 	DbgFAdj
 	DbgFDIS
 	DbgFLSP
+	DbgFFlags
 )
 
 var dlogger = log.New(os.Stderr, "DEBUG:", log.Ldate|log.Ltime|log.Lmicroseconds)

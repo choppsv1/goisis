@@ -1,3 +1,4 @@
+// -*- coding: us-ascii-unix -*-
 package main
 
 import (
@@ -10,8 +11,59 @@ import (
 	"time"
 )
 
+// =======
+// Globals
+// =======
+
 // lanLinkCircuitIDs is used to allocate circuit IDs
 var lanLinkCircuitIDs = [2]byte{0, 0}
+
+// ==========
+// Interfaces
+// ==========
+
+//
+// Link represents level dependent operations on a circuit.
+//
+type Link interface {
+	DISInfoChanged()
+	ProcessPDU(*RecvPDU) error
+	UpdateAdj(*RecvPDU) error
+	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
+	ClearFlag(UpdFlag, *LSPSegment)
+	ClearFlagLocked(UpdFlag, *clns.LSPID)
+	SetFlag(UpdFlag, *LSPSegment)
+}
+
+// ClearSRMFlag clears an SRM flag for the given LSPSegment on the given Link
+func ClearSRMFlag(l Link, lsp *LSPSegment) {
+	l.ClearFlag(SRM, lsp)
+}
+
+// ClearSSNFlag clears an SRM flag for the given LSPSegment on the given Link
+func ClearSSNFlag(l Link, lsp *LSPSegment) {
+	l.ClearFlag(SSN, lsp)
+}
+
+// SetSRMFlag sets an SRM flag for the given LSPSegment on the given Link
+func SetSRMFlag(l Link, lsp *LSPSegment) {
+	l.SetFlag(SRM, lsp)
+}
+
+// SetSSNFlag sets an SRM flag for the given LSPSegment on the given Link
+func SetSSNFlag(l Link, lsp *LSPSegment) {
+	l.SetFlag(SSN, lsp)
+}
+
+// =====
+// Types
+// =====
+
+// SendLSP is the value passed on the sendLSP channel
+type SendLSP struct {
+	lindex clns.LIndex
+	lspid  clns.LSPID
+}
 
 //
 // LinkLAN is a structure holding information on a IS-IS Specific level
@@ -28,6 +80,9 @@ type LinkLAN struct {
 	lanID     [clns.LANIDLen]byte
 	ourlanID  [clns.LANIDLen]byte
 	adjdb     *AdjDB
+
+	flags    map[clns.LSPID]UpdFlag
+	flagCond sync.Cond
 
 	disTimer       *time.Timer
 	disLock        sync.Mutex
@@ -50,8 +105,8 @@ func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
 		priority: clns.DefHelloPri,
 		helloInt: clns.DefHelloInt,
 		holdMult: clns.DefHelloMult,
+		flags:    make(map[clns.LSPID]UpdFlag),
 	}
-
 	link.adjdb = NewAdjDB(link, link.lindex)
 
 	lanLinkCircuitIDs[lindex]++
@@ -69,12 +124,14 @@ func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
 	// Start DIS election routine
 	go link.startElectingDIS()
 
+	go link.sendLSPs()
+
 	return link
 }
 
-// ===================
+// -------------------
 // Adjacency Functions
-// ===================
+// -------------------
 
 // UpdateAdj updates an adjacency with the new PDU information.
 func (link *LinkLAN) UpdateAdj(pdu *RecvPDU) error {
@@ -224,4 +281,56 @@ func (link *LinkLAN) disElect() {
 		// XXX start new DIS duties
 	}
 	// XXX Update Process: signal DIS change
+}
+
+// --------
+// Flooding
+// --------
+
+// ClearFlag clears a flag for LSPSegment on link.
+func (link *LinkLAN) ClearFlag(flag UpdFlag, lsp *LSPSegment) {
+	link.flagCond.L.Lock()
+	link.ClearFlagLocked(flag, &lsp.lspid)
+	link.flagCond.L.Unlock()
+}
+
+// ClearFlagLocked clears a flag for LSPSegment on link without locking
+func (link *LinkLAN) ClearFlagLocked(flag UpdFlag, lspid *clns.LSPID) {
+	nflag := link.flags[*lspid] & ^flag
+	if nflag != 0 {
+		link.flags[*lspid] = nflag
+	} else {
+		delete(link.flags, *lspid)
+	}
+	if (GlbDebug & DbgFFlags) != 0 {
+		debug(DbgFFlags, "Clear %s on %s for %s", flag, link, lspid)
+	}
+}
+
+// SetFlag sets a flag for LSPSegment on link and schedules a send
+func (link *LinkLAN) SetFlag(flag UpdFlag, lsp *LSPSegment) {
+	link.flagCond.L.Lock()
+	defer link.flagCond.L.Unlock()
+	link.flags[lsp.lspid] |= flag
+	if (GlbDebug & DbgFFlags) != 0 {
+		debug(DbgFFlags, "Set %s on %s for %s", flag, link, lsp)
+	}
+	link.flagCond.Signal()
+}
+
+// XXX this go rtn has now quit
+func (link *LinkLAN) sendLSPs() {
+	link.flagCond.L.Lock()
+	for {
+		for len(link.flags) == 0 {
+			debug(DbgFFlags, "Waiting for LSP flags on %s", link)
+			link.flagCond.Wait()
+		}
+		// locked, send LSPs
+		for lspid, flags := range link.flags {
+			debug(DbgFFlags, "Clearing flags %s for %s on %s",
+				flags, lspid, link)
+			link.ClearFlagLocked(flags, &lspid)
+		}
+	}
 }
