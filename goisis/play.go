@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"github.com/choppsv1/goisis/tlv"
 	"reflect"
-	//"sync"
+	"sync"
 	"time"
 )
 
@@ -20,6 +20,13 @@ const (
 	baz = iota + 8
 	foobar
 )
+
+type myint int
+
+func (mi myint) gofunc(wg *sync.WaitGroup) {
+	fmt.Println(mi)
+	wg.Done()
+}
 
 func playground() {
 	var tlvArray = []byte{1, 1, 0xff}
@@ -80,4 +87,17 @@ func playground() {
 	// }
 	// wg.Wait()
 
+	// Read that this wouldn't work, but didn't agree with the reasoning.
+	// the author claimed that 'mi' would only be evaluated when the go
+	// routine ran and so could all be the same final value, but the
+	// variable has to actually bind at time of eval b/c I think it
+	// represents just another argument to the function.
+	//
+	wg := sync.WaitGroup{}
+	li := []myint{1, 2, 3, 4}
+	for _, mi := range li {
+		wg.Add(1)
+		go mi.gofunc(&wg)
+	}
+	wg.Wait()
 }

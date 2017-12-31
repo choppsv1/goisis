@@ -1,11 +1,12 @@
 // Update implements the update process (flooding)
-package main
+package update
 
 import (
 	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/pkt"
+	xtime "github.com/choppsv1/goisis/time"
 	"sync"
 	"time"
 )
@@ -47,10 +48,9 @@ type LSPSegment struct {
 	hdr          []byte
 	lspid        clns.LSPID
 	lindex       clns.LIndex
-	lifetime     *Holdtime
-	zeroLifetime *Holdtime
+	lifetime     *xtime.Timeout
+	zeroLifetime *xtime.Timeout
 	holdTimer    *time.Timer
-	refreshTimer *time.Timer
 	isAck        bool
 	purgeLock    sync.Mutex
 }
@@ -106,13 +106,14 @@ func NewLSPSegment(pdu *PDU) (*LSPSegment, error) {
 		lindex: pdu.pdutype.GetPDULIndex(),
 	}
 	copy(lsp.lspid[:], hdr[clns.HdrLSPLSPID:])
-	lifetime := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
-	lsp.lifetime = NewHoldtime(lifetime)
+	lifesec := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
+	lsp.lifetime = xtime.NewTimeoutSec(lifesec)
 	lsp.holdTimer = time.AfterFunc(lsp.lifetime.TimeLeft(), lsp.expire)
-	// We aren't locked but this isn't in the DB yet.
-	if lsp.isOursLocked() {
-		lsp.refreshTimer = time.NewTimer(lsp.lifetime.TimeLeft())
-	}
+
+	// // We aren't locked but this isn't in the DB yet.
+	// if lsp.isOursLocked() {
+	//      lsp.refreshTimer = time.NewTimer(lsp.lifetime.TimeLeft())
+	// }
 	return lsp, nil
 }
 
@@ -164,35 +165,35 @@ func (lsp *LSPSegment) Update(pdu *PDU) error {
 	hdr = hdr[:clns.HdrLSPSize]
 	lsp.pdu = *pdu
 	lsp.hdr = hdr
-	lifetime := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
+	lifetime := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:]) * time.Duration
 
 	// This LSP is being purged
 	if lifetime == 0 {
 		if lsp.zeroLifetime == nil {
-			lsp.zeroLifetime = NewHoldtime(clns.ZeroMaxAge)
-		} else if lsp.zeroLifetime.TimeLeft() < clns.ZeroMaxAge {
+			lsp.zeroLifetime = NewHoldtime(clns.ZeroMaxAgeDur)
+		} else if lsp.zeroLifetime.TimeLeft() < clns.ZeroMaxAgeDur {
 			// this is due to a seqno Update
-			lsp.zeroLifetime.Reset(clns.ZeroMaxAge)
+			lsp.zeroLifetime.Reset(clns.ZeroMaxAgeDur)
 		}
 		lsp.holdTimer.Reset(lsp.zeroLifetime.TimeLeft())
-		debug(DbgFLSP, "Updated zero-lifetime LSP to %s", lsp)
+		debug(DbgFLSP, "Updated zero-lifetime LSP %s to %s", lsp, lsp.holdTimer)
 		return nil
 	}
 
 	// Reset the hold timer
 	lsp.zeroLifetime = nil
 	lsp.lifetime.Reset(lifetime)
-	lsp.holdTimer.Reset(time.Duration(lifetime) * time.Second)
+	lsp.holdTimer.Reset(lifetime)
 
-	if lsp.isOursLocked() {
-		// assert(lsp.refreshTimer != nil)
-		timeleft := (lifetime * 3) / 4
-		// assert timeleft
-		if !lsp.refreshTimer.Stop() {
-			<-lsp.refreshTimer.C
-		}
-		lsp.refreshTimer.Reset(time.Duration(timeleft) * time.Second)
-	}
+	// if lsp.isOursLocked() {
+	// 	// assert(lsp.refreshTimer != nil)
+	// 	timeleft := lifetime * 3 / 4
+	// 	// assert timeleft
+	// 	if !lsp.refreshTimer.Stop() {
+	// 		<-lsp.refreshTimer.C
+	// 	}
+	// 	lsp.refreshTimer.Reset(timeleft)
+	// }
 
 	debug(DbgFLSP, "Updated %s", lsp)
 	return nil

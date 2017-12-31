@@ -7,6 +7,7 @@ import (
 	"github.com/choppsv1/goisis/pkt"
 	"net"
 	"strings"
+	"time"
 )
 
 // ===============================
@@ -133,7 +134,9 @@ const (
 	LSPPNodeIDOff  = 6
 	LSPSegmentOff  = 7
 	MaxAge         = 1200
+	MaxAgeDur      = time.Duration(1200) * time.Second
 	ZeroMaxAge     = 60
+	ZeroMaxAgeDur  = time.Duration(60) * time.Second
 	LSPRecvBufSize = 1492
 	DefHelloInt    = 10
 	DefHelloMult   = 3
