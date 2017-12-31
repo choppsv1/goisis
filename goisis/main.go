@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
+	"github.com/choppsv1/goisis/goisis/update"
 	"net"
 	"os"
 	"strings"
@@ -20,18 +21,13 @@ var GlbAreaID []byte
 var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 
 // GlbDebug are the enable debug.
-var GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS
-
-// var GlbDebug DbgFlag
+var GlbDebug DbgFlags
 
 // GlbCDB is the global circuit DB for this instance
 var GlbCDB = NewCircuitDB()
 
 // GlbUpdateDB are the LSP Update DB for each level.
-var GlbUpdateDB = [2]UpdateDB{
-	{lindex: 0, db: make(map[clns.LSPID]*LSPSegment)},
-	{lindex: 1, db: make(map[clns.LSPID]*LSPSegment)},
-}
+var GlbUpdateDB [2]*update.UpdateDB
 
 // GlbQuit is a channel to signal go routines should end
 var GlbQuit = make(chan bool)
@@ -39,6 +35,7 @@ var GlbQuit = make(chan bool)
 func main() {
 	var err error
 
+	// XXX need to check for debug flags
 	// areaIDPtr := flag.String("areaid", "00", "area id of this instance")
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
@@ -50,15 +47,38 @@ func main() {
 		return
 	}
 
+	//
+	// Initialize Debug
+	//
+	GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS
+
+	//
+	// Initialize System and AreaIDs
+	//
+
 	GlbSystemID, err = clns.ISOEncode(*sysIDPtr)
 
 	// XXX eventually support custom areas
 	GlbAreaID = make([]byte, 1)
 	GlbAreaID[0] = 0x00
 
+	//
+	// Initialize Update DB
+	//
+	dbdebug := func(format string, a ...interface{}) {
+		debug(DbgFUpd, format, a)
+	}
+	if !debugIsSet(DbgFUpd) {
+		dbdebug = nil
+	}
+	for i := clns.LIndex(0); i < 2; i++ {
+		GlbUpdateDB[i] = update.NewUpdateDB(i, GlbCDB.SetAllSRM, dbdebug)
+	}
 	quit := make(chan bool)
 
-	// Get interfaces to run on.
+	//
+	// Initialize Interfaces
+	//
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)

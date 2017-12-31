@@ -1,5 +1,9 @@
 package main
 
+import (
+	"github.com/choppsv1/goisis/clns"
+)
+
 //
 // CircuitDB is a database of circuits we run on.
 //
@@ -18,5 +22,5 @@ func NewCircuitDB() *CircuitDB {
 	return cdb
 }
 
-func (cdb *CircuitDB) SetAllSRM(lsp *LSPSegment) {
+func (cdb *CircuitDB) SetAllSRM(lspid *clns.LSPID) {
 }

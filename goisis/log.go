@@ -15,7 +15,7 @@ const (
 	DbgFPkt DbgFlags = 1 << iota
 	DbgFAdj
 	DbgFDIS
-	DbgFLSP
+	DbgFUpd
 	DbgFFlags
 )
 

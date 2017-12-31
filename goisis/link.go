@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
+	"github.com/choppsv1/goisis/goisis/update"
 	"github.com/choppsv1/goisis/tlv"
 	"sync"
 	"time"
@@ -30,34 +31,52 @@ type Link interface {
 	ProcessPDU(*RecvPDU) error
 	UpdateAdj(*RecvPDU) error
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
-	ClearFlag(FlagIndex, *LSPSegment)
+	ClearFlag(FlagIndex, *clns.LSPID)
 	ClearFlagLocked(FlagIndex, *clns.LSPID)
-	SetFlag(FlagIndex, *LSPSegment)
+	SetFlag(FlagIndex, *clns.LSPID)
 }
 
-// ClearSRMFlag clears an SRM flag for the given LSPSegment on the given Link
-func ClearSRMFlag(l Link, lsp *LSPSegment) {
-	l.ClearFlag(SRM, lsp)
+// ClearSRMFlag clears an SRM flag for the given LSPID on the given Link
+func ClearSRMFlag(l Link, lspid *clns.LSPID) {
+	l.ClearFlag(SRM, lspid)
 }
 
-// ClearSSNFlag clears an SRM flag for the given LSPSegment on the given Link
-func ClearSSNFlag(l Link, lsp *LSPSegment) {
-	l.ClearFlag(SSN, lsp)
+// ClearSSNFlag clears an SRM flag for the given LSPID on the given Link
+func ClearSSNFlag(l Link, lspid *clns.LSPID) {
+	l.ClearFlag(SSN, lspid)
 }
 
-// SetSRMFlag sets an SRM flag for the given LSPSegment on the given Link
-func SetSRMFlag(l Link, lsp *LSPSegment) {
-	l.SetFlag(SRM, lsp)
+// SetSRMFlag sets an SRM flag for the given LSPID on the given Link
+func SetSRMFlag(l Link, lspid *clns.LSPID) {
+	l.SetFlag(SRM, lspid)
 }
 
-// SetSSNFlag sets an SRM flag for the given LSPSegment on the given Link
-func SetSSNFlag(l Link, lsp *LSPSegment) {
-	l.SetFlag(SSN, lsp)
+// SetSSNFlag sets an SRM flag for the given LSPID on the given Link
+func SetSSNFlag(l Link, lspid *clns.LSPID) {
+	l.SetFlag(SSN, lspid)
 }
 
 // =====
 // Types
 // =====
+
+// FlagIndex Update process flooding flags (not true flags)
+type FlagIndex int
+
+// Update process flooding flags
+const (
+	SRM FlagIndex = iota
+	SSN
+)
+
+var flagStrings = [2]string{
+	"SRM",
+	"SSN",
+}
+
+func (flag FlagIndex) String() string {
+	return flagStrings[flag]
+}
 
 // SendLSP is the value passed on the sendLSP channel
 type SendLSP struct {
@@ -90,7 +109,7 @@ type LinkLAN struct {
 	disElected     bool
 
 	// Update Process
-	lspdb    *UpdateDB
+	lspdb    *update.UpdateDB
 	flags    [2]map[clns.LSPID]bool
 	flagCond sync.Cond
 }
@@ -115,7 +134,7 @@ func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
 			make(map[clns.LSPID]bool)},
 	}
 	link.adjdb = NewAdjDB(link, link.lindex)
-	link.lspdb = &GlbUpdateDB[lindex]
+	link.lspdb = GlbUpdateDB[lindex]
 
 	lanLinkCircuitIDs[lindex]++
 	link.lclCircID = lanLinkCircuitIDs[lindex]
@@ -295,14 +314,14 @@ func (link *LinkLAN) disElect() {
 // Flooding
 // --------
 
-// ClearFlag clears a flag for LSPSegment on link.
-func (link *LinkLAN) ClearFlag(flag FlagIndex, lsp *LSPSegment) {
+// ClearFlag clears a flag for lspid on link.
+func (link *LinkLAN) ClearFlag(flag FlagIndex, lspid *clns.LSPID) {
 	link.flagCond.L.Lock()
-	link.ClearFlagLocked(flag, &lsp.lspid)
+	link.ClearFlagLocked(flag, lspid)
 	link.flagCond.L.Unlock()
 }
 
-// ClearFlagLocked clears a flag for LSPSegment on link without locking
+// ClearFlagLocked clears a flag for lspid on link without locking
 func (link *LinkLAN) ClearFlagLocked(flag FlagIndex, lspid *clns.LSPID) {
 	delete(link.flags[flag], *lspid)
 	if (GlbDebug & DbgFFlags) != 0 {
@@ -310,13 +329,13 @@ func (link *LinkLAN) ClearFlagLocked(flag FlagIndex, lspid *clns.LSPID) {
 	}
 }
 
-// SetFlag sets a flag for LSPSegment on link and schedules a send
-func (link *LinkLAN) SetFlag(flag FlagIndex, lsp *LSPSegment) {
+// SetFlag sets a flag for lspid on link and schedules a send
+func (link *LinkLAN) SetFlag(flag FlagIndex, lspid *clns.LSPID) {
 	link.flagCond.L.Lock()
 	defer link.flagCond.L.Unlock()
-	link.flags[flag][lsp.lspid] = true
+	link.flags[flag][*lspid] = true
 	if (GlbDebug & DbgFFlags) != 0 {
-		debug(DbgFFlags, "Set %s on %s for %s", flag, link, lsp)
+		debug(DbgFFlags, "Set %s on %s for %s", flag, link, lspid)
 	}
 	link.flagCond.Signal()
 }

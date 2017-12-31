@@ -14,7 +14,7 @@ type Timeout struct {
 
 func (ht *Timeout) String() string {
 	return fmt.Sprintf("Timeout(left:%v, duration:%v",
-		ht.TimeLeft(),
+		ht.Remaining(),
 		ht.duration)
 }
 
@@ -56,7 +56,7 @@ func (ht *Timeout) ExpiresAt() time.Time {
 
 // IsExpired returns true if the timeout has expired.
 func (ht *Timeout) IsExpired() bool {
-	return ht.TimeLeft() <= 0
+	return ht.Remaining() <= 0
 }
 
 // Remaining returns the duration left before the timeout expires.
