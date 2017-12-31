@@ -21,11 +21,15 @@ import (
 // ourSNPA keeps track of all of our SNPA to check for looped back frames
 var ourSNPA = make(map[ether.MAC]bool)
 
-// clnsTemplate are the static values we use in the CLNS header.
-var clnsTemplate = []uint8{
+// llcTemplate are the static values we use int he LLC header.
+var llcTemplate = []uint8{
 	clns.LLCSSAP,
 	clns.LLCDSAP,
 	clns.LLCControl,
+}
+
+// clnsTemplate are the static values we use in the CLNS header.
+var clnsTemplate = []uint8{
 	clns.IDRPISIS,
 	0, // Header Length
 	clns.Version,
@@ -44,9 +48,10 @@ var clnsTemplate = []uint8{
 // Circuit is an IS-IS/CLNS physical interface.
 //
 type Circuit interface {
-	ClosePDU(ether.Frame, []byte) error
+	ClosePDU(ether.Frame, []byte)
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
-	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte)
+	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
+	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
 }
 
 // -----
@@ -186,26 +191,44 @@ func NewCircuitLAN(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf 
 	return c, nil
 }
 
+// OpenFrame returns a full sized ethernet frame with the headers
+// semi-initialized, a call to CloseFrame completes the initialization.
+func (c *CircuitLAN) OpenFrame(dst net.HardwareAddr) (ether.Frame, []byte) {
+	etherp := make([]byte, c.intf.MTU+14)
+	copy(etherp[ether.HdrEthDest:], dst)
+	copy(etherp[ether.HdrEthSrc:], c.intf.HardwareAddr)
+
+	llcp := etherp[ether.HdrEthSize:]
+	copy(llcp, llcTemplate)
+
+	return etherp, llcp[ether.HdrLLCSize:]
+
+}
+
+// CloseFrame closes the ethernet frame (sets the len value).
+func CloseFrame(etherp ether.Frame, len int) {
+	etherp.SetTypeLen(len + ether.HdrLLCSize)
+}
+
 //
 // OpenPDU returns a frame buffer sized to the MTU of the interface (including
 // the L2 frame header) after initializing the CLNS header fields.
 //
-func (c *CircuitLAN) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.Frame, []byte, []byte) {
-	etherp := make([]byte, c.intf.MTU+14)
-
-	copy(etherp[ether.HdrEthDest:], dst)
-	copy(etherp[ether.HdrEthSrc:], c.intf.HardwareAddr)
-	clnsp := etherp[ether.HdrEthSize:]
+func (c *CircuitLAN) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.Frame, []byte, []byte, []byte) {
+	etherp, clnsp := c.OpenFrame(dst)
 	copy(clnsp, clnsTemplate)
+
 	clnsp[clns.HdrCLNSPDUType] = uint8(pdutype)
-	clnsp[clns.HdrCLNSLen] = clns.HdrLenMap[pdutype]
-	return etherp, clnsp, clnsp[clns.HdrCLNSSize:]
+	hdrlen := clns.HdrLenMap[pdutype]
+	clnsp[clns.HdrCLNSLen] = hdrlen
+
+	return etherp, clnsp, clnsp[clns.HdrCLNSSize:], clnsp[hdrlen:]
 }
 
 //
 // ClosePDU finalizes the PDU length fields given endp "pointer"
 //
-func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) error {
+func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) {
 	ethlen := tlv.GetOffset([]byte(etherp), endp)
 	epayloadlen := ethlen - ether.HdrEthSize
 	pdutype := etherp[ether.HdrEthSize+ether.HdrLLCSize+clns.HdrCLNSPDUType]
@@ -220,5 +243,4 @@ func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) error {
 
 	debug(DbgFPkt, "Closing PDU with pdulen %d payload %d framelen %d",
 		pdulen, epayloadlen, len(etherp))
-	return nil
 }

@@ -30,9 +30,9 @@ type Link interface {
 	ProcessPDU(*RecvPDU) error
 	UpdateAdj(*RecvPDU) error
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
-	ClearFlag(UpdFlag, *LSPSegment)
-	ClearFlagLocked(UpdFlag, *clns.LSPID)
-	SetFlag(UpdFlag, *LSPSegment)
+	ClearFlag(FlagIndex, *LSPSegment)
+	ClearFlagLocked(FlagIndex, *clns.LSPID)
+	SetFlag(FlagIndex, *LSPSegment)
 }
 
 // ClearSRMFlag clears an SRM flag for the given LSPSegment on the given Link
@@ -70,9 +70,11 @@ type SendLSP struct {
 // operation on a LAN link.
 //
 type LinkLAN struct {
-	circuit   *CircuitLAN
-	level     clns.Level
-	lindex    clns.LIndex //  level - 1 for array indexing
+	circuit *CircuitLAN
+	level   clns.Level
+	lindex  clns.LIndex //  level - 1 for array indexing
+
+	// Hello Process
 	helloInt  int
 	holdMult  int
 	priority  uint8
@@ -81,13 +83,16 @@ type LinkLAN struct {
 	ourlanID  [clns.LANIDLen]byte
 	adjdb     *AdjDB
 
-	flags    map[clns.LSPID]UpdFlag
-	flagCond sync.Cond
-
+	// Hello Process DIS
 	disTimer       *time.Timer
 	disLock        sync.Mutex
 	disInfoChanged chan bool
 	disElected     bool
+
+	// Update Process
+	lspdb    *UpdateDB
+	flags    [2]map[clns.LSPID]bool
+	flagCond sync.Cond
 }
 
 func (link *LinkLAN) String() string {
@@ -105,9 +110,12 @@ func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
 		priority: clns.DefHelloPri,
 		helloInt: clns.DefHelloInt,
 		holdMult: clns.DefHelloMult,
-		flags:    make(map[clns.LSPID]UpdFlag),
+		flags: [2]map[clns.LSPID]bool{
+			make(map[clns.LSPID]bool),
+			make(map[clns.LSPID]bool)},
 	}
 	link.adjdb = NewAdjDB(link, link.lindex)
+	link.lspdb = &GlbUpdateDB[lindex]
 
 	lanLinkCircuitIDs[lindex]++
 	link.lclCircID = lanLinkCircuitIDs[lindex]
@@ -124,7 +132,7 @@ func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
 	// Start DIS election routine
 	go link.startElectingDIS()
 
-	go link.sendLSPs()
+	go link.processFlags()
 
 	return link
 }
@@ -288,49 +296,136 @@ func (link *LinkLAN) disElect() {
 // --------
 
 // ClearFlag clears a flag for LSPSegment on link.
-func (link *LinkLAN) ClearFlag(flag UpdFlag, lsp *LSPSegment) {
+func (link *LinkLAN) ClearFlag(flag FlagIndex, lsp *LSPSegment) {
 	link.flagCond.L.Lock()
 	link.ClearFlagLocked(flag, &lsp.lspid)
 	link.flagCond.L.Unlock()
 }
 
 // ClearFlagLocked clears a flag for LSPSegment on link without locking
-func (link *LinkLAN) ClearFlagLocked(flag UpdFlag, lspid *clns.LSPID) {
-	nflag := link.flags[*lspid] & ^flag
-	if nflag != 0 {
-		link.flags[*lspid] = nflag
-	} else {
-		delete(link.flags, *lspid)
-	}
+func (link *LinkLAN) ClearFlagLocked(flag FlagIndex, lspid *clns.LSPID) {
+	delete(link.flags[flag], *lspid)
 	if (GlbDebug & DbgFFlags) != 0 {
 		debug(DbgFFlags, "Clear %s on %s for %s", flag, link, lspid)
 	}
 }
 
 // SetFlag sets a flag for LSPSegment on link and schedules a send
-func (link *LinkLAN) SetFlag(flag UpdFlag, lsp *LSPSegment) {
+func (link *LinkLAN) SetFlag(flag FlagIndex, lsp *LSPSegment) {
 	link.flagCond.L.Lock()
 	defer link.flagCond.L.Unlock()
-	link.flags[lsp.lspid] |= flag
+	link.flags[flag][lsp.lspid] = true
 	if (GlbDebug & DbgFFlags) != 0 {
 		debug(DbgFFlags, "Set %s on %s for %s", flag, link, lsp)
 	}
 	link.flagCond.Signal()
 }
 
-// XXX this go rtn has now quit
-func (link *LinkLAN) sendLSPs() {
+// _processFlags is the guts of the sendLSP function
+func (link *LinkLAN) _processFlags() {
 	link.flagCond.L.Lock()
-	for {
-		for len(link.flags) == 0 {
-			debug(DbgFFlags, "Waiting for LSP flags on %s", link)
-			link.flagCond.Wait()
+	llen := len(link.flags[SRM])
+	plen := len(link.flags[SSN])
+	for llen+plen == 0 {
+		debug(DbgFFlags, "Waiting for LSP flags on %s", link)
+		link.flagCond.Wait()
+	}
+
+	// ---------------------------------
+	// Locked - Process 1 LSP and 1 PSNP
+	// ---------------------------------
+
+	//
+	// Get an LSP PDU
+	//
+	var lspf ether.Frame
+	// Only process one LSP per lock
+	for lspid := range link.flags[SRM] {
+		var l int
+		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.lindex])
+		if l = link.lspdb.CopyLSPPayload(&lspid, payload); l == 0 {
+			break
 		}
-		// locked, send LSPs
-		for lspid, flags := range link.flags {
-			debug(DbgFFlags, "Clearing flags %s for %s on %s",
-				flags, lspid, link)
-			link.ClearFlagLocked(flags, &lspid)
+		// Clear the flag when the send is eminent, doesn't have to
+		// happen now though.
+		link.ClearFlagLocked(SRM, &lspid)
+		CloseFrame(etherp, l)
+		lspf = etherp
+		break
+	}
+
+	//
+	// Get a PSNP PDU
+	//
+	var psnpf ether.Frame
+	if plen != 0 {
+		psnpf = link.getPSNPLocked()
+	}
+
+	link.flagCond.L.Unlock()
+
+	//
+	// Unlocked
+	//
+
+	// Send LSP
+	if lspf != nil {
+		link.circuit.outpkt <- lspf
+	}
+
+	// Send PSNP
+	if psnpf != nil {
+		link.circuit.outpkt <- psnpf
+	}
+}
+
+// XXX this go rtn has no quit
+func (link *LinkLAN) processFlags() {
+	for {
+		link._processFlags()
+	}
+}
+
+// fillSNPLocked is called to fill a SNP packet with SNPEntries the flagCond
+// Lock has is held.
+func (link *LinkLAN) fillSNPLocked(tlvp tlv.Data) tlv.Data {
+	track, _ := tlv.Open(tlvp, tlv.TypeSNPEntries, nil)
+	for lspid := range link.flags[SSN] {
+		var err error
+		var p tlv.Data
+		if p, err = track.Alloc(tlv.SNPEntSize); err != nil {
+			// Assert that this is the error we expect.
+			_ = err.(tlv.ErrNoSpace)
+			break
+		}
+		// XXX maybe it's a bug if this fails?
+		if ok := link.lspdb.CopyLSPSNP(&lspid, p); ok {
+			link.ClearFlagLocked(SSN, &lspid)
+		} else {
+			logger.Panicf("Got LSP SSN with no LSP for %s", lspid)
 		}
 	}
+	return track.Close()
+}
+
+// getPSNPLocked is called to get one PSNP PDU worth of SNP based on SSN flags,
+// the flagCond Lock is held.
+func (link *LinkLAN) getPSNPLocked() ether.Frame {
+	var pdutype clns.PDUType
+	if link.lindex == 0 {
+		pdutype = clns.PDUTypePSNPL1
+	} else {
+		pdutype = clns.PDUTypePSNPL2
+	}
+	etherp, _, psnp, tlvp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
+
+	// Fill fixed header values
+	copy(psnp[clns.HdrPSNPSrcID:], GlbSystemID)
+
+	// Fill as many SNP entries as we can in one PDU
+	endp := link.fillSNPLocked(tlvp)
+
+	link.circuit.ClosePDU(etherp, endp)
+
+	return etherp
 }

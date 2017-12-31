@@ -49,7 +49,7 @@ func sendLANHello(link *LinkLAN) error {
 
 	// XXX we want the API to return payload here and later we convert frame
 	// in close so that we aren't dependent on ethernet
-	etherp, _, iihp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
+	etherp, _, iihp, endp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
 
 	// ----------
 	// IIH Header
@@ -61,7 +61,6 @@ func sendLANHello(link *LinkLAN) error {
 		uint16(link.helloInt*link.holdMult))
 	iihp[clns.HdrIIHLANPriority] = byte(clns.DefHelloPri) & 0x7F
 	copy(iihp[clns.HdrIIHLANLANID:], link.lanID[:])
-	endp := iihp[clns.HdrIIHLANSize:]
 
 	// --------
 	// Add TLVs

@@ -27,6 +27,12 @@ var GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS
 // GlbCDB is the global circuit DB for this instance
 var GlbCDB = NewCircuitDB()
 
+// GlbUpdateDB are the LSP Update DB for each level.
+var GlbUpdateDB = [2]UpdateDB{
+	{lindex: 0, db: make(map[clns.LSPID]*LSPSegment)},
+	{lindex: 1, db: make(map[clns.LSPID]*LSPSegment)},
+}
+
 // GlbQuit is a channel to signal go routines should end
 var GlbQuit = make(chan bool)
 
