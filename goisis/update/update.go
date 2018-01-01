@@ -1,4 +1,4 @@
-// Update implements the update process (flooding)
+// Package update implements the update process (flooding)
 package update
 
 import (
@@ -7,7 +7,6 @@ import (
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
-	"sync"
 	"time"
 )
 
@@ -15,42 +14,41 @@ import (
 // Types
 // =====
 
-// Input is the PDU input to the udpate process
-
-type Input struct {
+// inputPDU is the PDU input to the udpate process
+type inputPDU struct {
 	payload []byte
 	pdutype clns.PDUType
 	tlvs    map[tlv.Type][]tlv.Data
 }
 
-// InputGetLSP is the input to db.GetLSP channel
-type InputGetLSP struct {
+// inputGetLSP is the input to db.cgetlsp channel
+type inputGetLSP struct {
 	lspid   *clns.LSPID
 	payload []byte
 	result  chan int
 }
 
-// InputGetSNP is the input to db.GetSNP channel
-type InputGetSNP struct {
+// inputGetSNP is the input to db.cgetsnp channel
+type inputGetSNP struct {
 	lspid  *clns.LSPID
 	ent    []byte
 	result chan bool
 }
 
-// UpdateDB holds all LSP for a given level.
-type UpdateDB struct {
-	Input     chan Input
-	GetLSP    chan InputGetLSP
-	GetSNP    chan InputGetSNP
+// DB holds all LSP for a given level.
+type DB struct {
+	cin       chan inputPDU
+	cgetlsp   chan inputGetLSP
+	cgetsnp   chan inputGetSNP
 	expireLSP chan clns.LSPID
 	lindex    clns.LIndex
-	db        map[clns.LSPID]*LSPSegment
+	db        map[clns.LSPID]*lspSegment
 	setsrm    func(*clns.LSPID)
 	debug     func(string, ...interface{})
 }
 
-// LSPSegment represents an LSP segment from an IS.
-type LSPSegment struct {
+// lspSegment represents an LSP segment from an IS.
+type lspSegment struct {
 	payload      []byte
 	hdr          []byte
 	tlvs         map[tlv.Type][]tlv.Data
@@ -62,54 +60,66 @@ type LSPSegment struct {
 	isAck        bool
 }
 
-// NewUpdateDB returns a new Update Process LSP database
-func NewUpdateDB(lindex clns.LIndex,
+// NewDB returns a new Update Process LSP database
+func NewDB(lindex clns.LIndex,
 	setsrm func(*clns.LSPID),
-	debug func(string, ...interface{})) *UpdateDB {
-	db := &UpdateDB{
+	debug func(string, ...interface{})) *DB {
+	db := &DB{
 		lindex:    lindex,
-		db:        make(map[clns.LSPID]*LSPSegment),
+		db:        make(map[clns.LSPID]*lspSegment),
 		setsrm:    setsrm,
-		Input:     make(chan Input),
-		GetLSP:    make(chan InputGetLSP),
-		GetSNP:    make(chan InputGetSNP),
+		cin:       make(chan inputPDU),
+		cgetlsp:   make(chan inputGetLSP),
+		cgetsnp:   make(chan inputGetSNP),
 		expireLSP: make(chan clns.LSPID),
 	}
 	return db
 }
 
+//
+// External API no locking required.
+//
+
+// InputPDU creates or updates an LSP in the update DB.
+func (db *DB) InputPDU(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
+	db.cin <- inputPDU{payload, pdutype, tlvs}
+}
+
 // CopyLSPPayload copies the LSP payload buffer for sending if found and returns
 // the count of copied bytes, otherwise returns 0.
-//
-func (db *UpdateDB) CopyLSPPayload(lspid *clns.LSPID, payload []byte) int {
+func (db *DB) CopyLSPPayload(lspid *clns.LSPID, payload []byte) int {
 	result := make(chan int)
-	db.GetLSP <- InputGetLSP{lspid, payload, result}
+	db.cgetlsp <- inputGetLSP{lspid, payload, result}
 	l := <-result
 	return l
 }
 
-// CopyLSPSNP copies the LSPSegment SNP data if found and return true, else false
-func (db *UpdateDB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
+// CopyLSPSNP copies the lspSegment SNP data if found and return true, else false
+func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 	result := make(chan bool)
-	db.GetSNP <- InputGetSNP{lspid, ent, result}
+	db.cgetsnp <- inputGetSNP{lspid, ent, result}
 	found := <-result
 	return found
 }
 
+//
+// Internal Functionality only called in the update go routine, no locking required.
+//
+
 // StringLocked returns a string identifying the LSP DB lock must be held
-func (lsp *LSPSegment) StringLocked() string {
+func (lsp *lspSegment) stringLocked() string {
 	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v cksum:%#04x",
-		clns.ISOString(lsp.getLSPIDLocked(), false),
+		clns.ISOString(lsp.getLSPID(), false),
 		lsp.getSeqNoLocked(),
-		lsp.getLifetimeLocked(),
-		lsp.getCksumLocked())
+		lsp.getLifetime(),
+		lsp.getCksum())
 }
 
-// newLSPSegment creates a new LSPSegment struct
-func (db *UpdateDB) newLSPSegment(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) *LSPSegment {
+// newLSPSegment creates a new lspSegment struct
+func (db *DB) newLSPSegment(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) *lspSegment {
 	hdr := payload[clns.HdrCLNSSize:]
 	hdr = hdr[:clns.HdrLSPSize]
-	lsp := &LSPSegment{
+	lsp := &lspSegment{
 		payload: payload,
 		hdr:     hdr,
 		lindex:  pdutype.GetPDULIndex(),
@@ -128,34 +138,106 @@ func (db *UpdateDB) newLSPSegment(payload []byte, pdutype clns.PDUType, tlvs map
 	return lsp
 }
 
-func (lsp *LSPSegment) getSeqNoLocked() uint32 {
+func (lsp *lspSegment) getSeqNoLocked() uint32 {
 	return pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:])
 }
 
-func (lsp *LSPSegment) getLifetimeLocked() uint16 {
+func (lsp *lspSegment) getLifetime() uint16 {
 	return pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:])
 }
 
-func (lsp *LSPSegment) getCksumLocked() uint16 {
+func (lsp *lspSegment) setLifetime(sec uint16) {
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], sec)
+}
+
+func (lsp *lspSegment) getCksum() uint16 {
 	return pkt.GetUInt16(lsp.hdr[clns.HdrLSPCksum:])
 }
 
-// func (lsp *LSPSegment) getFlags() clns.LSPFlags {
+// func (lsp *lspSegment) getFlags() clns.LSPFlags {
 // 	return clns.LSPFlags(lsp.hdr[clns.HdrLSPFlags])
 // }
 
-func (lsp *LSPSegment) getLSPIDLocked() []byte {
+func (lsp *lspSegment) getLSPID() []byte {
 	return lsp.hdr[clns.HdrLSPLSPID : clns.HdrLSPLSPID+clns.LSPIDLen]
 }
 
-// func (lsp *LSPSegment) isOursLocked() bool {
-// 	return bytes.Equal(lsp.getLSPIDLocked()[:clns.SysIDLen], GlbSystemID)
+// func (lsp *lspSegment) isOursLocked() bool {
+// 	return bytes.Equal(lsp.getLSPID()[:clns.SysIDLen], GlbSystemID)
 // }
 
-// updateLSP updates an LSPSegment with a newer version received on a link.
-func (db *UpdateDB) updateLSP(lsp *LSPSegment, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
+// recvPurgeLSP handles a received lifetime == 0 LSPSegment
+func (db *DB) recvPurgeLSP(lsp *lspSegment) {
+	if lsp.zeroLifetime == nil {
+		lsp.zeroLifetime = xtime.NewTimeout(clns.ZeroMaxAgeDur)
+	} else if lsp.zeroLifetime.Remaining() < clns.ZeroMaxAgeDur {
+		// this is due to a seqno Update
+		lsp.zeroLifetime.Reset(clns.ZeroMaxAgeDur)
+	}
+	lsp.holdTimer.Reset(lsp.zeroLifetime.Remaining())
 	if db.debug != nil {
-		s := lsp.StringLocked()
+		db.debug("Updated zero-lifetime LSP %s to %s", lsp, lsp.holdTimer)
+	}
+}
+
+// initiatePurgeLSP initiates a purge of an LSPSegment due to lifetime running
+// to zero.
+func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
+	// Update the lifetime to zero if it wasn't already.
+	pkt.PutUInt16(lsp.hdr[:clns.HdrLSPLifetime], 0)
+
+	if db.debug != nil {
+		db.debug("Lifetime for %s expired, purging.", lsp.stringLocked())
+	}
+
+	lsp.zeroLifetime = xtime.NewTimeout(clns.ZeroMaxAgeDur)
+	wasActive := lsp.holdTimer.Reset(lsp.zeroLifetime.Remaining())
+	if wasActive {
+		db.debug("XXX hold timer was active when it should not have been")
+	}
+
+	//-----------------------------
+	// ISO10589: 7.3.16.4: a, b, c
+	//-----------------------------
+
+	// a)
+	db.setsrm(&lsp.lspid)
+
+	// b) Retain only LSP header. XXX we need more space for auth and purge tlv
+	pdulen := uint16(clns.HdrCLNSSize + clns.HdrLSPSize)
+	lsp.payload = lsp.payload[:pdulen]
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
+}
+
+func (db *DB) updateLSPLifetime(lsp *lspSegment) {
+	// Update the lifetime value of this LSP possibly initiating a purge
+	if lsp.getLifetime() > 0 {
+		lifetime := lsp.lifetime.RemainingSec()
+		lsp.setLifetime(uint16(lifetime))
+		if lifetime == 0 {
+			// We've noticed lifetime going to zero prior
+			// our timer firing, purge it now.
+
+			// Stop our timer now as we are going to purge.
+			if !lsp.holdTimer.Stop() {
+				// if timer wasn't active drain it.
+				<-lsp.holdTimer.C
+			}
+			db.initiatePurgeLSP(lsp)
+		}
+	} else {
+		// lifetime already zero we have to be purging still
+		if lsp.zeroLifetime == nil {
+			panic("zeroLifetime not set on expired LSP")
+		}
+	}
+}
+
+// updateLSP updates an lspSegment with a newer version received on a link.
+func (db *DB) updateLSP(lsp *lspSegment, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
+	if db.debug != nil {
+		s := lsp.stringLocked()
 		db.debug("Updating %s", s)
 	}
 	// XXX I think this is wrong... we need to understand this better.
@@ -174,16 +256,7 @@ func (db *UpdateDB) updateLSP(lsp *LSPSegment, payload []byte, pdutype clns.PDUT
 
 	// This LSP is now being purged
 	if lifetime == 0 {
-		if lsp.zeroLifetime == nil {
-			lsp.zeroLifetime = xtime.NewTimeout(clns.ZeroMaxAgeDur)
-		} else if lsp.zeroLifetime.Remaining() < clns.ZeroMaxAgeDur {
-			// this is due to a seqno Update
-			lsp.zeroLifetime.Reset(clns.ZeroMaxAgeDur)
-		}
-		lsp.holdTimer.Reset(lsp.zeroLifetime.Remaining())
-		if db.debug != nil {
-			db.debug("Updated zero-lifetime LSP %s to %s", lsp, lsp.holdTimer)
-		}
+		db.recvPurgeLSP(lsp)
 		return
 	}
 
@@ -207,9 +280,9 @@ func (db *UpdateDB) updateLSP(lsp *LSPSegment, payload []byte, pdutype clns.PDUT
 	}
 }
 
-func (db *UpdateDB) runOnce() {
+func (db *DB) runOnce() {
 	select {
-	case in := <-db.Input:
+	case in := <-db.cin:
 		var lspid clns.LSPID
 		copy(lspid[:], in.payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
 		lsp, ok := db.db[lspid]
@@ -217,7 +290,28 @@ func (db *UpdateDB) runOnce() {
 			db.updateLSP(lsp, in.payload, in.pdutype, in.tlvs)
 		} else {
 			lsp := db.newLSPSegment(in.payload, in.pdutype, in.tlvs)
+			db.db[lspid] = lsp
 		}
+
+	case in := <-db.cgetsnp:
+		lsp, ok := db.db[*in.lspid]
+		if !ok {
+			in.result <- false
+			break
+		}
+		db.updateLSPLifetime(lsp)
+		copy(in.ent, lsp.hdr[clns.HdrLSPLifetime:clns.HdrLSPFlags])
+		in.result <- true
+
+	case in := <-db.cgetlsp:
+		lsp, ok := db.db[*in.lspid]
+		if !ok {
+			in.result <- 0
+			break
+		}
+		db.updateLSPLifetime(lsp)
+		in.result <- copy(in.payload, lsp.payload)
+
 	case lspid := <-db.expireLSP:
 		// Come in here 2 ways, either with zeroLifetime non-nil but
 		// expired in which case we should be good to remove, or nil
@@ -228,10 +322,13 @@ func (db *UpdateDB) runOnce() {
 			break
 		}
 		if !lsp.lifetime.IsExpired() {
-			// Must have updated
+			// Must have updated the LSP to not be expired.
 			break
 		}
 		if lsp.zeroLifetime != nil {
+			if !lsp.zeroLifetime.IsExpired() {
+				panic("expiring non-zero lifetime expired LSP")
+			}
 			lsp.zeroLifetime = nil
 			if db.debug != nil {
 				db.debug("Removing zero-lifetime LSP %s", lsp)
@@ -240,49 +337,12 @@ func (db *UpdateDB) runOnce() {
 			break
 		}
 
-		//
-		// Our hold timer expired b/c this LSP was not refreshed.
-		//
-
-		// Update the lifetime to zero if it wasn't already.
-		pkt.PutUInt16(lsp.hdr[:clns.HdrLSPLifetime], 0)
-
-		if db.debug != nil {
-			db.debug("Lifetime for %s expired, purging.", lsp.StringLocked())
-		}
-
-		lsp.zeroLifetime = xtime.NewTimeout(clns.ZeroMaxAgeDur)
-		wasActive := lsp.holdTimer.Reset(lsp.zeroLifetime.Remaining())
-
-		//-----------------------------
-		// ISO10589: 7.3.16.4: a, b, c
-		//-----------------------------
-
-		// a)
-		db.setsrm(&lsp.lspid)
-
-		// b) Retain only LSP header. XXX we need more space for auth and purge tlv
-		pdulen := uint16(clns.HdrCLNSSize + clns.HdrLSPSize)
-		lsp.payload = lsp.payload[:pdulen]
-		pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
-		pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
-	case in := <-db.GetSNP:
-		lsp, ok := db.db[*in.lspid]
-		if ok {
-			copy(in.ent, lsp.hdr[clns.HdrLSPLifetime:clns.HdrLSPFlags])
-		}
-		in.result <- ok
-	case in := <-db.GetLSP:
-		if lsp, ok := db.db[*in.lspid]; !ok {
-			in.result <- 0
-		} else {
-			in.result <- copy(in.payload, lsp.payload)
-		}
+		db.initiatePurgeLSP(lsp)
 	}
 }
 
 // Run runs the update process
-func (db *UpdateDB) Run() {
+func (db *DB) Run() {
 	for {
 		db.runOnce()
 	}

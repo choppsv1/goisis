@@ -27,7 +27,7 @@ var GlbDebug DbgFlags
 var GlbCDB = NewCircuitDB()
 
 // GlbUpdateDB are the LSP Update DB for each level.
-var GlbUpdateDB [2]*update.UpdateDB
+var GlbUpdateDB [2]*update.DB
 
 // GlbQuit is a channel to signal go routines should end
 var GlbQuit = make(chan bool)
@@ -72,7 +72,7 @@ func main() {
 		dbdebug = nil
 	}
 	for i := clns.LIndex(0); i < 2; i++ {
-		GlbUpdateDB[i] = update.NewUpdateDB(i, GlbCDB.SetAllSRM, dbdebug)
+		GlbUpdateDB[i] = update.NewDB(i, GlbCDB.SetAllSRM, dbdebug)
 	}
 	quit := make(chan bool)
 
@@ -83,7 +83,7 @@ func main() {
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		var lanlink *CircuitLAN
-		lanlink, err = NewCircuitLAN(ifname, GlbCDB.inpkts, quit, 1)
+		lanlink, err = GlbCDB.NewCircuit(ifname, 1)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating link: %s", err)
 			os.Exit(1)

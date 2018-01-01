@@ -28,7 +28,8 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 //
 type Link interface {
 	DISInfoChanged()
-	ProcessPDU(*RecvPDU) error
+	ProcessLSP(*RecvPDU) error
+	ProcessSNP(*RecvPDU) error
 	UpdateAdj(*RecvPDU) error
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
 	ClearFlag(FlagIndex, *clns.LSPID)
@@ -109,7 +110,7 @@ type LinkLAN struct {
 	disElected     bool
 
 	// Update Process
-	lspdb    *update.UpdateDB
+	lspdb    *update.DB
 	flags    [2]map[clns.LSPID]bool
 	flagCond sync.Cond
 }
@@ -121,7 +122,7 @@ func (link *LinkLAN) String() string {
 //
 // NewLinkLAN creates a LAN link for a given IS-IS level.
 //
-func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit chan bool) *LinkLAN {
+func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit <-chan bool) *LinkLAN {
 	link := &LinkLAN{
 		circuit:  c,
 		level:    clns.Level(lindex + 1),

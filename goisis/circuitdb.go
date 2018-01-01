@@ -8,8 +8,10 @@ import (
 // CircuitDB is a database of circuits we run on.
 //
 type CircuitDB struct {
-	links  map[string]interface{}
-	inpkts chan *RecvPDU
+	links   map[string]interface{}
+	iihpkts chan *RecvPDU
+	lsppkts chan *RecvPDU
+	snppkts chan *RecvPDU
 }
 
 //
@@ -18,9 +20,24 @@ type CircuitDB struct {
 func NewCircuitDB() *CircuitDB {
 	cdb := new(CircuitDB)
 	cdb.links = make(map[string]interface{})
-	cdb.inpkts = make(chan *RecvPDU)
+	cdb.iihpkts = make(chan *RecvPDU)
+	cdb.lsppkts = make(chan *RecvPDU)
+	cdb.snppkts = make(chan *RecvPDU)
 	return cdb
 }
 
 func (cdb *CircuitDB) SetAllSRM(lspid *clns.LSPID) {
+}
+
+func (cdb *CircuitDB) NewCircuit(ifname string, levelf clns.LevelFlag) (*CircuitLAN, error) {
+	cb, err := NewCircuitBase(ifname,
+		cdb.iihpkts,
+		cdb.lsppkts,
+		cdb.snppkts,
+		GlbQuit)
+	if err != nil {
+		return nil, err
+	}
+	// Check interface type and allocate LAN or P2P
+	return NewCircuitLAN(cb, levelf)
 }

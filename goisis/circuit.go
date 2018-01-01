@@ -82,45 +82,53 @@ type RecvPDU struct {
 type CircuitBase struct {
 	intf   *net.Interface
 	sock   raw.IntfSocket
-	inpkt  chan<- *RecvPDU
+	iihpkt chan<- *RecvPDU
+	lsppkt chan<- *RecvPDU
+	snppkt chan<- *RecvPDU
 	outpkt chan []byte
 	quit   <-chan bool
 }
 
-func (base *CircuitBase) String() string {
-	return fmt.Sprintf("CircuitBase(%s)", base.intf.Name)
+func (cb *CircuitBase) String() string {
+	return fmt.Sprintf("CircuitBase(%s)", cb.intf.Name)
 }
 
 //
 // NewCircuitBase allocates and initializes a new CircuitBase structure.
 //
-func NewCircuitBase(ifname string, inpkt chan<- *RecvPDU, quit chan bool, filter []bpf.RawInstruction) (*CircuitBase, error) {
+func NewCircuitBase(ifname string, iihpkt, lsppkt, snppkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
 	var err error
 
-	base := &CircuitBase{
-		inpkt:  inpkt,
+	cb := &CircuitBase{
+		iihpkt: iihpkt,
+		lsppkt: lsppkt,
+		snppkt: snppkt,
 		outpkt: make(chan []byte),
 		quit:   quit,
 	}
 
-	base.intf, err = net.InterfaceByName(ifname)
+	cb.intf, err = net.InterfaceByName(ifname)
 	if err != nil {
 		return nil, err
 	}
 	// Get raw socket connection for interface send/receive
 
-	base.sock, err = raw.NewInterfaceSocket(base.intf.Name)
+	cb.sock, err = raw.NewInterfaceSocket(cb.intf.Name)
 	if err != nil {
 		return nil, err
 	}
 
-	err = base.sock.SetBPF(filter)
+	return cb, nil
+}
+
+func (cb *CircuitBase) SetBPF(filter []bpf.RawInstruction) error {
+
+	err := cb.sock.SetBPF(filter)
 	if err != nil {
 		fmt.Printf("Error setting filter: %s\n", err)
-		return nil, err
 	}
+	return err
 
-	return base, nil
 }
 
 //
@@ -145,10 +153,12 @@ func (c *CircuitLAN) getOurSNPA() net.HardwareAddr {
 //
 // NewCircuitLAN creates a LAN circuit for a given IS-IS level.
 //
-func NewCircuitLAN(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf clns.LevelFlag) (*CircuitLAN, error) {
+func NewCircuitLAN(cb *CircuitBase, levelf clns.LevelFlag) (*CircuitLAN, error) {
 	var err error
 
-	c := &CircuitLAN{}
+	c := &CircuitLAN{
+		CircuitBase: cb,
+	}
 
 	// IS-IS LAN BPF filter
 	filter, err := bpf.Assemble([]bpf.Instruction{
@@ -170,9 +180,7 @@ func NewCircuitLAN(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf 
 	if err != nil {
 		return nil, err
 	}
-
-	c.CircuitBase, err = NewCircuitBase(ifname, inpkt, quit, filter)
-	if err != nil {
+	if err = cb.SetBPF(filter); err != nil {
 		return nil, err
 	}
 
@@ -181,7 +189,7 @@ func NewCircuitLAN(ifname string, inpkt chan<- *RecvPDU, quit chan bool, levelf 
 
 	for i := uint(0); i < 2; i++ {
 		if (levelf & (1 << i)) != 0 {
-			c.levlink[i] = NewLinkLAN(c, clns.LIndex(i), quit)
+			c.levlink[i] = NewLinkLAN(c, clns.LIndex(i), cb.quit)
 		}
 	}
 

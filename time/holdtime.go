@@ -68,3 +68,13 @@ func (ht *Timeout) Remaining() time.Duration {
 	}
 	return left
 }
+
+// RemainingSec returns the number of seconds left before the timeout expires.
+func (ht *Timeout) RemainingSec() int {
+	elapsed := time.Now().Sub(ht.timestamp)
+	left := int((ht.duration - elapsed) / time.Second)
+	if left <= 0 {
+		return 0
+	}
+	return left
+}

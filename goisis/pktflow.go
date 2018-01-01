@@ -7,7 +7,7 @@
 //      |                         |
 //      |                         | ...
 //      V                         |
-//  ProcessPDU (Link)             \- FrameToPDU <- readPackets (circuit N) go rtn
+//  ProcessOtherPDU (Link)        \- FrameToPDU <- readPackets (circuit N) go rtn
 //
 package main
 
@@ -41,7 +41,22 @@ func (base *CircuitBase) readPackets(c Circuit) {
 		if pdu == nil {
 			continue
 		}
-		base.inpkt <- pdu
+		// Receive IIH inside the circuit's go routine in parallel.
+		switch pdu.pdutype {
+		case clns.PDUTypeIIHLANL1:
+			level, _ := pdu.pdutype.GetPDULevel()
+			RecvLANHello(pdu.link, pdu, level)
+		case clns.PDUTypeIIHLANL2:
+			level, _ := pdu.pdutype.GetPDULevel()
+			RecvLANHello(pdu.link, pdu, level)
+		case clns.PDUTypeLSPL1:
+			base.lsppkt <- pdu
+		case clns.PDUTypeLSPL2:
+			base.lsppkt <- pdu
+		default:
+			base.snppkt <- pdu
+		}
+
 	}
 }
 
@@ -79,8 +94,13 @@ func (base *CircuitBase) writePackets() {
 func processPDUs(cdb *CircuitDB) {
 	for {
 		select {
-		case pdu := <-cdb.inpkts:
-			err := pdu.link.ProcessPDU(pdu)
+		case pdu := <-cdb.lsppkts:
+			err := pdu.link.ProcessLSP(pdu)
+			if err != nil {
+				debug(DbgFPkt, "Error processing packet: %s\n", err)
+			}
+		case pdu := <-cdb.snppkts:
+			err := pdu.link.ProcessSNP(pdu)
 			if err != nil {
 				debug(DbgFPkt, "Error processing packet: %s\n", err)
 			}
@@ -154,23 +174,50 @@ func (c *CircuitLAN) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
 	return pdu
 }
 
-// ProcessPDU is called with a frame received on this link at this level.
+// ----------------------------------------------------------------------------
 // Currently all received packets are handled serially in the order they arrive
-// (using a single go routine). This could be changed in the future don't rely
-// on it.
-func (link *LinkLAN) ProcessPDU(pdu *RecvPDU) error {
+// (using a single go routine). However we may change this (specifically for
+// IIH) to handle those in the receiving go routines.
+// ----------------------------------------------------------------------------
+
+// ProcessLSP handle non-IIH PDUs, these are currently all handled in the
+// same go routine.
+func (link *LinkLAN) ProcessLSP(pdu *RecvPDU) error {
 	// Validate ethernet values.
 	// var src, dst [clns.SNPALen]byte
-	level, err := pdu.pdutype.GetPDULevel()
-	if err != nil {
-		return err
-	}
+	// level, err := pdu.pdutype.GetPDULevel()
+	// if err != nil {
+	// 	return err
+	// }
 
 	switch pdu.pdutype {
-	case clns.PDUTypeIIHLANL1:
-		return RecvLANHello(link, pdu, level)
-	case clns.PDUTypeIIHLANL2:
-		return RecvLANHello(link, pdu, level)
+	case clns.PDUTypeLSPL1:
+		debug(DbgFPkt, "INFO: ignoring LSPL1 on %s for now", link)
+	case clns.PDUTypeLSPL2:
+		debug(DbgFPkt, "INFO: ignoring LSPL2 on %s for now", link)
+	case clns.PDUTypeCSNPL1:
+		debug(DbgFPkt, "INFO: ignoring CSNPL1 on %s for now", link)
+	case clns.PDUTypeCSNPL2:
+		debug(DbgFPkt, "INFO: ignoring CSNPL2 on %s for now", link)
+	case clns.PDUTypePSNPL1:
+		debug(DbgFPkt, "INFO: ignoring PSNPL1 on %s for now", link)
+	case clns.PDUTypePSNPL2:
+		debug(DbgFPkt, "INFO: ignoring PSNPL2 on %s for now", link)
+	}
+	return nil
+}
+
+// ProcessSNP handle non-IIH PDUs, these are currently all handled in the
+// same go routine.
+func (link *LinkLAN) ProcessSNP(pdu *RecvPDU) error {
+	// Validate ethernet values.
+	// var src, dst [clns.SNPALen]byte
+	// level, err := pdu.pdutype.GetPDULevel()
+	// if err != nil {
+	// 	return err
+	// }
+
+	switch pdu.pdutype {
 	case clns.PDUTypeLSPL1:
 		debug(DbgFPkt, "INFO: ignoring LSPL1 on %s for now", link)
 	case clns.PDUTypeLSPL2:
