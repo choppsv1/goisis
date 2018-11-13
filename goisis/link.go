@@ -8,6 +8,7 @@ import (
 	"golang.org/x/net/bpf"
 	"io"
 	"net"
+	"os"
 	"syscall"
 )
 
@@ -34,12 +35,14 @@ type RecvFrame struct {
 // LinkCommon collects common functionality from all types of links
 // ----------------------------------------------------------------
 type LinkCommon struct {
-	link   Link
-	intf   *net.Interface
-	sock   raw.IntfSocket
-	inpkt  chan<- *RecvFrame
-	outpkt chan []byte
-	quit   <-chan bool
+	link    Link
+	intf    *net.Interface
+	sock    raw.IntfSocket
+	v4addrs []net.IPNet
+	v6addrs []net.IPNet
+	inpkt   chan<- *RecvFrame
+	outpkt  chan []byte
+	quit    <-chan bool
 }
 
 func (common *LinkCommon) String() string {
@@ -110,14 +113,30 @@ func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) 
 		quit:   quit,
 	}
 
-	common.intf, err = net.InterfaceByName(ifname)
-	if err != nil {
+	if common.intf, err = net.InterfaceByName(ifname); err != nil {
+		fmt.Fprintf(os.Stderr, "Error InterfaceByName: %s\n", err)
 		return nil, err
 	}
-	// Get raw socket connection for interface send/receive
 
-	common.sock, err = raw.NewInterfaceSocket(common.intf.Name)
-	if err != nil {
+	var addrs []net.Addr
+	if addrs, err = common.intf.Addrs(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error intf.Addrs: %s\n", err)
+		return nil, err
+	}
+	for _, addr := range addrs {
+		ipnet := addr.(*net.IPNet)
+		ipv4 := ipnet.IP.To4()
+		if ipv4 != nil {
+			ipnet.IP = ipv4
+			common.v4addrs = append(common.v4addrs, *ipnet)
+		} else {
+			common.v6addrs = append(common.v6addrs, *ipnet)
+		}
+	}
+
+	// Get raw socket connection for interface send/receive
+	if common.sock, err = raw.NewInterfaceSocket(common.intf.Name); err != nil {
+		fmt.Fprintf(os.Stderr, "Error NewInterfaceSocket: %s\n", err)
 		return nil, err
 	}
 
@@ -139,6 +158,7 @@ func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) 
 		bpf.RetConstant{Val: 0},
 	})
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error bpf.Assemble: %s\n", err)
 		return nil, err
 	}
 
