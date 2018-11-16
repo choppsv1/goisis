@@ -7,9 +7,9 @@ package raw
 
 import (
 	"fmt"
+	// "github.com/choppsv1/goisis/pkt"
 	"golang.org/x/net/bpf"
 	"net"
-	"pkt"
 	"syscall"
 	"unsafe"
 )
@@ -122,17 +122,11 @@ func NewInterfaceSocket(ifname string) (IntfSocket, error) {
 // SetBPF filter on the interface socket
 func (sock IntfSocket) SetBPF(filter []bpf.RawInstruction) error {
 	prog := syscall.SockFprog{
-		Len:    uint16(len(filter)),
+		Len:    uint32(len(filter)),
 		Filter: (*syscall.SockFilter)(unsafe.Pointer(&filter[0])),
 	}
-	_, _, err := syscall.Syscall6(syscall.SYS_SETSOCKOPT, uintptr(sock.fd),
-		uintptr(syscall.SOL_SOCKET),
-		uintptr(syscall.SO_ATTACH_FILTER),
-		uintptr(unsafe.Pointer(&prog)),
-		uintptr(unsafe.Sizeof(prog)),
-		0)
-	if err != 0 {
-		return syscall.Errno(err)
+	if err = fdioctl(rv.fd, syscall.BIOCSETF, uintptr(unsafe.Pointer(&prog))); err != nil {
+		return err
 	}
 	return nil
 }
