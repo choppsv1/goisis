@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	// "github.com/choppsv1/goisis/raw"
 	"github.com/choppsv1/goisis/tlv"
 	"reflect"
 )
@@ -25,6 +26,9 @@ func playground() {
 	var tlvBData = []byte(tlvData)
 	var ab = make([]byte, 6)
 	var a addr = ab
+
+	// ip, net := raw.GetInterfacePrefix("vboxnet3")
+	// fmt.Printf("interface addr: %s net: %s\n", ip, net)
 
 	tlv.TLV.Type(tlvData)
 	fmt.Printf("tlvArray type: %s\n", reflect.TypeOf(tlvArray).String())
