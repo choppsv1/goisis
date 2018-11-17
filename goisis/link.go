@@ -8,6 +8,7 @@ import (
 	"golang.org/x/net/bpf"
 	"io"
 	"net"
+	"os"
 	"syscall"
 )
 
@@ -112,12 +113,14 @@ func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) 
 
 	common.intf, err = net.InterfaceByName(ifname)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error InterfaceByName: %s\n", err)
 		return nil, err
 	}
 	// Get raw socket connection for interface send/receive
 
 	common.sock, err = raw.NewInterfaceSocket(common.intf.Name)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error NewInterfaceSocket: %s\n", err)
 		return nil, err
 	}
 
@@ -139,6 +142,7 @@ func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) 
 		bpf.RetConstant{Val: 0},
 	})
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error bpf.Assemble: %s\n", err)
 		return nil, err
 	}
 

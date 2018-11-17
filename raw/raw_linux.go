@@ -12,6 +12,18 @@ import (
 	"unsafe"
 )
 
+// ReadPacket from the interface
+func (sock IntfSocket) ReadPacket() ([]byte, syscall.Sockaddr, error) {
+	n, _, _, from, err := syscall.Recvmsg(sock.fd, nil, nil, syscall.MSG_PEEK|syscall.MSG_TRUNC)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	b := make([]byte, n)
+	n, _, _, from, err = syscall.Recvmsg(sock.fd, b, nil, 0)
+	return b, from, err
+}
+
 // WritePacket writes an L2 frame to the interface
 func (sock IntfSocket) WritePacket(pkt []byte, to net.HardwareAddr) (int, error) {
 	addr := &syscall.SockaddrLinklayer{

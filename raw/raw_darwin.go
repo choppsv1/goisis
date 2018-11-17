@@ -10,13 +10,15 @@ import (
 	// "github.com/choppsv1/goisis/pkt"
 	"golang.org/x/net/bpf"
 	"net"
+	"os"
 	"syscall"
 	"unsafe"
 )
 
 // Constants not found elsewhere
 const (
-	IFNAMSIZ = 16 // Max interface name length
+	IFNAMSIZ   = 16 // Max interface name length
+	MAXBUFSIZE = 1518
 )
 
 type EtherHeader struct {
@@ -29,9 +31,30 @@ type EtherHeader struct {
 // ssize_t payload_len;
 // }
 
-type ifreq struct {
-	name [IFNAMSIZ]byte
-	data uintptr
+type ivalue struct {
+	name  [IFNAMSIZ]byte
+	value int16
+}
+
+type SockFilter struct {
+	Code uint16 // Actual filter code.
+	JT   uint8  // Jump true.
+	JF   uint8  // Jump false.
+	K    uint32 // Generic multiuse field.
+}
+
+type SockFprog struct {
+	Len    uint32
+	Filter *SockFilter
+}
+
+// ReadPacket from the interface
+func (sock IntfSocket) ReadPacket() ([]byte, syscall.Sockaddr, error) {
+	b := make([]byte, MAXBUFSIZE)
+	//sys	Read(fd int, p []byte) (n int, err error)
+	n, err := syscall.Read(sock.fd, b)
+	fmt.Fprintf(os.Stderr, "INFO: ReadPacket len %d\n", n)
+	return b, nil, err
 }
 
 // WritePacket writes an L2 frame to the interface
@@ -43,6 +66,8 @@ func (sock IntfSocket) WritePacket(pkt []byte, to net.HardwareAddr) (int, error)
 	// copy(addr.Addr[:], to)
 	// n, err := syscall.SendmsgN(sock.fd, pkt, nil, addr, 0)
 	// return n, err
+	n, err := syscall.Write(sock.fd, pkt)
+	fmt.Fprintf(os.Stderr, "INFO: WritePacket to %s n %d err %s\n", to, n, err)
 	return 0, nil
 }
 
@@ -54,6 +79,7 @@ func (sock IntfSocket) WriteEtherPacket(pkt []byte) (int, error) {
 	// copy(addr.Addr[:], pkt[0:6])
 	// n, err := syscall.SendmsgN(sock.fd, pkt, nil, addr, 0)
 	// return n, err
+	fmt.Fprintf(os.Stderr, "INFO: WriteEtherPacket\n")
 	return 0, nil
 }
 
@@ -75,45 +101,58 @@ func openBPF() (int, error) {
 
 func fdioctl(fd int, ctl uintptr, args uintptr) error {
 	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), ctl, args)
-	return err
+	if err != 0 {
+		return syscall.Errno(err)
+	}
+	return nil
 }
 
 // NewInterfaceSocket open a new raw socket to the given interface
 func NewInterfaceSocket(ifname string) (IntfSocket, error) {
 	var rv IntfSocket
 	var err error
+	var ival int
+	ivalp := uintptr(unsafe.Pointer(&ival))
 
 	rv.fd, err = openBPF()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error openBPF: %s\n", err)
 		return rv, err
 	}
 
-	// rv.fd, err = syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(syscall.ETH_P_ALL)))
-	// if err != nil {
-	// 	return rv, err
-	// }
+	// This must be done before SETIF
+	ival = 1518
+	if err = fdioctl(rv.fd, syscall.BIOCSBLEN, ivalp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error BIOCSBLEN: %s\n", err)
+		return rv, err
+	}
 
 	rv.intf, err = net.InterfaceByName(ifname)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error InterfaceByName: %s\n", err)
 		return rv, err
 	}
 
-	var iv ifreq
+	var iv ivalue
 	copy(iv.name[:], []byte(ifname))
-	ivp := uintptr(unsafe.Pointer(&iv))
-	enable := 1
-	enablep := uintptr(unsafe.Pointer(&enable))
+	if err = fdioctl(rv.fd, syscall.BIOCSETIF, uintptr(unsafe.Pointer(&iv))); err != nil {
+		fmt.Fprintf(os.Stderr, "Error BIOCSETIF: %s\n", err)
+		return rv, err
+	}
 
-	if err = fdioctl(rv.fd, syscall.BIOCSETIF, ivp); err != nil {
+	ival = 1
+	if err = fdioctl(rv.fd, syscall.BIOCGHDRCMPLT, ivalp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error BIOCGHDRCMPLT: %s\n", err)
 		return rv, err
 	}
-	if err = fdioctl(rv.fd, syscall.BIOCGHDRCMPLT, enablep); err != nil {
+	if err = fdioctl(rv.fd, syscall.BIOCIMMEDIATE, ivalp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error BIOCIMMEDIATE: %s\n", err)
 		return rv, err
 	}
-	if err = fdioctl(rv.fd, syscall.BIOCSSEESENT, enablep); err != nil {
-		return rv, err
-	}
-	if err = fdioctl(rv.fd, syscall.BIOCIMMEDIATE, enablep); err != nil {
+
+	ival = 0
+	if err = fdioctl(rv.fd, syscall.BIOCSSEESENT, ivalp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error BIOCSSEESENT: %s\n", err)
 		return rv, err
 	}
 	return rv, nil
@@ -121,11 +160,12 @@ func NewInterfaceSocket(ifname string) (IntfSocket, error) {
 
 // SetBPF filter on the interface socket
 func (sock IntfSocket) SetBPF(filter []bpf.RawInstruction) error {
-	prog := syscall.SockFprog{
+	prog := SockFprog{
 		Len:    uint32(len(filter)),
-		Filter: (*syscall.SockFilter)(unsafe.Pointer(&filter[0])),
+		Filter: (*SockFilter)(unsafe.Pointer(&filter[0])),
 	}
-	if err = fdioctl(rv.fd, syscall.BIOCSETF, uintptr(unsafe.Pointer(&prog))); err != nil {
+	if err := fdioctl(sock.fd, syscall.BIOCSETF, uintptr(unsafe.Pointer(&prog))); err != nil {
+		fmt.Fprintf(os.Stderr, "Error BIOCSETF: %s\n", err)
 		return err
 	}
 	return nil
