@@ -21,8 +21,9 @@ var GlbAreaID []byte
 var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 
 // GlbDebug are the enable debug.
-//var GlbDebug = DbgFPkt | DbgFAdj
-var GlbDebug DbgFlag
+var GlbDebug = DbgFPkt | DbgFAdj
+
+//var GlbDebug DbgFlag
 
 func main() {
 	var err error
@@ -53,7 +54,7 @@ func main() {
 		var lanlink *LANLink
 		lanlink, err = NewLANLink(ifname, linkdb.inpkts, quit, 1)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating link: %s", err)
+			fmt.Fprintf(os.Stderr, "Error creating link: %s\n", err)
 			os.Exit(1)
 		}
 		linkdb.links[ifname] = lanlink

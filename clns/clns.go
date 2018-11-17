@@ -170,9 +170,25 @@ const (
 	PDUTypePSNPL2           = 27
 )
 
+var PDUTypeDesc = map[PDUType]string{
+	PDUTypeIIHLANL1: "PDUTypeIIHLANL1",
+	PDUTypeIIHLANL2: "PDUTypeIIHLANL2",
+	PDUTypeIIHP2P:   "PDUTypeIIHP2P",
+	PDUTypeLSPL1:    "PDUTypeLSPL1",
+	PDUTypeLSPL2:    "PDUTypeLSPL2",
+	PDUTypeCSNPL1:   "PDUTypeCSNPL1",
+	PDUTypeCSNPL2:   "PDUTypeCSNPL2",
+	PDUTypePSNPL1:   "PDUTypePSNPL1",
+	PDUTypePSNPL2:   "PDUTypePSNPL2",
+}
+
 func (typ PDUType) String() string {
 	// XXX add nice map with strings
-	return fmt.Sprintf("%d", typ)
+	if desc, ok := PDUTypeDesc[typ]; ok {
+		return fmt.Sprintf("%s", desc)
+	} else {
+		return fmt.Sprintf("%d", typ)
+	}
 }
 
 // ErrUnkPDUType is returned when an unknown PDU type is encountered

@@ -417,3 +417,32 @@ func AddAdjSNPA(p Data, addrs []net.HardwareAddr) (Data, error) {
 	}
 	return tlv.Close(), nil
 }
+
+// AddIntfAddr adds all ip addresses as interface addresses
+func AddIntfAddrs(p Data, addrs []net.IPNet) (Data, error) {
+	if len(addrs) == 0 {
+		return p, nil
+	}
+
+	var typ Type
+	if len(addrs[0].IP) == net.IPv4len {
+		typ = TypeIPv4IntfAddrs
+	} else {
+		typ = TypeIPv6IntfAddrs
+	}
+	tlv, err := Open(p, typ, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, addr := range addrs {
+		var p Data
+
+		alen := len(addr.IP)
+		if p, err = tlv.Alloc(alen); err != nil {
+			return nil, err
+		}
+		copy(p, addr.IP)
+	}
+	return tlv.Close(), nil
+}

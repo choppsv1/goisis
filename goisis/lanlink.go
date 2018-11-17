@@ -155,8 +155,12 @@ func (link *LANLink) ProcessPacket(frame *RecvFrame) error {
 	// Check for expected ether dst (correct mcast or us)
 	dst := ether.Frame(frame.pkt).GetDst()
 	if !bytes.Equal(dst, clns.AllLxIS[link.lindex]) {
+		if bytes.Equal(dst, clns.AllLxIS[link.level%2]) {
+			// Ok frame, just for the other level.
+			return nil
+		}
 		if !bytes.Equal(dst, link.GetOurSNPA()) {
-			logger.Printf("Dropping IS-IS frame to non-IS-IS address, exciting extensions?")
+			logger.Printf("Dropping IS-IS frame to non-IS-IS address (%s), exciting extensions?", dst)
 			return nil
 		}
 	}

@@ -82,23 +82,23 @@ func sendLANHello(link *LANLink) error {
 		return err
 	}
 
-	addrs := link.adjdb.GetAdjSNPA()
-	if len(addrs) > 0 {
-		t, err := tlv.Open(endp, tlv.TypeISNeighbors, nil)
+	if len(link.v4addrs) != 0 {
+		endp, err = tlv.AddIntfAddrs(endp, link.v4addrs)
 		if err != nil {
-			debug(DbgFPkt, "Error Opening %s TLVs: %s", t.Type, err)
 			return err
 		}
-		for _, addr := range addrs {
-			var b tlv.Data
-			alen := len(addr)
-			if b, err = t.Alloc(len(addr)); err != nil {
-				debug(DbgFPkt, "Error alocating %d space for %s TLVs: %s", alen, t.Type, err)
-				return err
-			}
-			copy(b, addr)
+	}
+	if len(link.v6addrs) != 0 {
+		endp, err = tlv.AddIntfAddrs(endp, link.v6addrs)
+		if err != nil {
+			return err
 		}
-		endp = t.Close()
+	}
+
+	endp, err = tlv.AddAdjSNPA(endp, link.adjdb.GetAdjSNPA())
+	if err != nil {
+		debug(DbgFPkt, "Error Adding SNPA: %s", err)
+		return err
 	}
 
 	// Pad to MTU

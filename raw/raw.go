@@ -1,10 +1,9 @@
+// +build darwin freebsd netbsd openbsd
+
 package raw
 
 import (
-	"golang.org/x/net/bpf"
 	"net"
-	"syscall"
-	"unsafe"
 )
 
 // IntfSocket is an interface socket connection
@@ -13,79 +12,52 @@ type IntfSocket struct {
 	intf *net.Interface
 }
 
-// ReadPacket from the interface
-func (sock IntfSocket) ReadPacket() ([]byte, syscall.Sockaddr, error) {
-	n, _, _, from, err := syscall.Recvmsg(sock.fd, nil, nil, syscall.MSG_PEEK|syscall.MSG_TRUNC)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	b := make([]byte, n)
-	n, _, _, from, err = syscall.Recvmsg(sock.fd, b, nil, 0)
-	return b, from, err
-}
-
-// WritePacket writes an L2 frame to the interface
-func (sock IntfSocket) WritePacket(pkt []byte, to net.HardwareAddr) (int, error) {
-	addr := &syscall.SockaddrLinklayer{
-		Ifindex: sock.intf.Index,
-		Halen:   uint8(len(to)),
-	}
-	copy(addr.Addr[:], to)
-	n, err := syscall.SendmsgN(sock.fd, pkt, nil, addr, 0)
-	return n, err
-}
-
-// WriteEtherPacket writes an Ethernet frame to the interface
-func (sock IntfSocket) WriteEtherPacket(pkt []byte) (int, error) {
-	addr := &syscall.SockaddrLinklayer{
-		Halen: 6,
-	}
-	copy(addr.Addr[:], pkt[0:6])
-	n, err := syscall.SendmsgN(sock.fd, pkt, nil, addr, 0)
-	return n, err
-}
-
 func htons(val uint16) uint16 {
 	return (val&0x00FF)<<8 | (val&0xFF00)>>8
 }
 
-// NewInterfaceSocket open a new raw socket to the given interface
-func NewInterfaceSocket(ifname string) (IntfSocket, error) {
-	var rv IntfSocket
-	var err error
-
-	rv.fd, err = syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(syscall.ETH_P_ALL)))
-	if err != nil {
-		return rv, err
-	}
-
-	rv.intf, err = net.InterfaceByName(ifname)
-	if err != nil {
-		return rv, err
-	}
-
-	err = syscall.BindToDevice(rv.fd, rv.intf.Name)
-	if err != nil {
-		return rv, err
-	}
-	return rv, nil
+func ntohs(val uint16) uint16 {
+	return htons(val)
 }
 
-// SetBPF filter on the interface socket
-func (sock IntfSocket) SetBPF(filter []bpf.RawInstruction) error {
-	prog := syscall.SockFprog{
-		Len:    uint16(len(filter)),
-		Filter: (*syscall.SockFilter)(unsafe.Pointer(&filter[0])),
-	}
-	_, _, err := syscall.Syscall6(syscall.SYS_SETSOCKOPT, uintptr(sock.fd),
-		uintptr(syscall.SOL_SOCKET),
-		uintptr(syscall.SO_ATTACH_FILTER),
-		uintptr(unsafe.Pointer(&prog)),
-		uintptr(unsafe.Sizeof(prog)),
-		0)
-	if err != 0 {
-		return syscall.Errno(err)
-	}
-	return nil
+func htonl(val uint32) uint32 {
+	return (val&0x000000FF)<<24 | (val&0x0000FF00)<<8 | (val&0x00FF0000)>>8 | (val&0xFF000000)>>24
 }
+
+func ntohl(val uint32) uint32 {
+	return htonl(val)
+}
+
+// Use go's OS independent functionality for doing this.
+// func GetInterfacePrefix(ifname string) (net.IP, net.IPNet) {
+// 	out, err := exec.Command("/sbin/ifconfig", ifname).Output()
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	// re := regexp.MustCompile("(?:HWaddr|ether) ([a-zA-Z0-9:]+)")
+// 	// match := re.FindSubmatch(out)
+// 	// assert match
+// 	// mac_addr = clns.mac_encode(match.group(1))
+
+// 	// # inet addr:192.168.1.10  Bcast:192.168.1.255  Mask:255.255.255.0
+// 	re := regexp.MustCompile("inet (?:addr:)?([0-9.]+).*(?:Mask:|netmask )([0-9.]+)")
+// 	match := re.FindSubmatch(out)
+// 	if len(match) < 2 {
+// 		log.Fatal("ERROR: No IPv4 address found for %s", ifname)
+// 	}
+// 	cidrstr := fmt.Sprintf("%s/%s", match[1], match[2])
+// 	addr, net, err := net.ParseCIDR(cidrstr)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	if net == nil {
+// 		log.Fatal("ERROR: No IPv4 netmask found for %s", ifname)
+// 	}
+// 	return addr, *net
+
+// 	// # mask = ipaddress.ip_address(match.group(2))
+// 	/// ipv4_prefix = ipaddress.ip_interface('{}/{}'.format(*match.groups()))
+// 	// # ipv4_prefix = ipaddress.ip_interface('{}/24'.format(match.group(1)))
+// 	// # ipv4_prefix = ipaddress.ip_interface('{}/24'.format(match.group(1)))
+// 	// return mac_addr, ipv4_prefix
+// }
