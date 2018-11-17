@@ -2,6 +2,8 @@
 //
 // November 9 2018, Christian Hopps <chopps@gmail.com>
 //
+// +build darwin freebsd netbsd openbsd
+//
 
 package raw
 
@@ -15,11 +17,6 @@ import (
 	"syscall"
 	"unsafe"
 )
-
-type bpf_timeval struct {
-	tv_sec  int32
-	tv_usec int32
-}
 
 var (
 	ErrShortFrame = errors.New("BPF: Short frame received")
@@ -41,17 +38,9 @@ type SockFprog struct {
 	Filter *bpf.RawInstruction
 }
 
-// Constants not found elsewhere
 const (
-	IFNAMSIZ   = 16 // Max interface name length
-	MAXBUFSIZE = 1518 + BPFH_MINSIZE + 2
+	MAXBUFSIZE = 1518 + BPFH_MINSIZE + 2 // Max frame size + BPF overhead
 )
-
-// ifreq
-type ivalue struct {
-	name  [IFNAMSIZ]byte
-	value int16
-}
 
 // ReadPacket from the interface
 func (sock IntfSocket) ReadPacket() ([]byte, syscall.Sockaddr, error) {
@@ -110,47 +99,31 @@ func fdioctl(fd int, ctl uintptr, args uintptr) error {
 func NewInterfaceSocket(ifname string) (IntfSocket, error) {
 	var rv IntfSocket
 	var err error
-	var ival int
-	ivalp := uintptr(unsafe.Pointer(&ival))
 
 	rv.fd, err = openBPF()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error openBPF: %s\n", err)
 		return rv, err
 	}
-
 	// This must be done before BIOCSETIF
-	ival = MAXBUFSIZE
-	if err = fdioctl(rv.fd, syscall.BIOCSBLEN, ivalp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error BIOCSBLEN: %s\n", err)
+	if _, err = syscall.SetBpfBuflen(rv.fd, MAXBUFSIZE); err != nil {
 		return rv, err
 	}
-
-	rv.intf, err = net.InterfaceByName(ifname)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error InterfaceByName: %s\n", err)
+	if rv.intf, err = net.InterfaceByName(ifname); err != nil {
 		return rv, err
 	}
-
-	var iv ivalue
-	copy(iv.name[:], []byte(ifname))
-	if err = fdioctl(rv.fd, syscall.BIOCSETIF, uintptr(unsafe.Pointer(&iv))); err != nil {
-		fmt.Fprintf(os.Stderr, "Error BIOCSETIF: %s\n", err)
+	if err = syscall.SetBpfInterface(rv.fd, ifname); err != nil {
 		return rv, err
 	}
-
-	ival = 1
-	if err = fdioctl(rv.fd, syscall.BIOCGHDRCMPLT, ivalp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error BIOCGHDRCMPLT: %s\n", err)
+	if err = syscall.SetBpfHeadercmpl(rv.fd, 1); err != nil {
 		return rv, err
 	}
-	if err = fdioctl(rv.fd, syscall.BIOCIMMEDIATE, ivalp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error BIOCIMMEDIATE: %s\n", err)
+	if err = syscall.SetBpfImmediate(rv.fd, 1); err != nil {
 		return rv, err
 	}
-
-	ival = 0
-	if err = fdioctl(rv.fd, syscall.BIOCSSEESENT, ivalp); err != nil {
+	// XXX no go version for this -- don't receive our own frames.
+	ival := 0
+	if err = fdioctl(rv.fd, syscall.BIOCSSEESENT, uintptr(unsafe.Pointer(&ival))); err != nil {
 		fmt.Fprintf(os.Stderr, "Error BIOCSSEESENT: %s\n", err)
 		return rv, err
 	}
