@@ -8,6 +8,7 @@ package raw
 import (
 	"fmt"
 	// "github.com/choppsv1/goisis/pkt"
+	"github.com/choppsv1/goisis/pkt"
 	"golang.org/x/net/bpf"
 	"net"
 	"os"
@@ -15,14 +16,30 @@ import (
 	"unsafe"
 )
 
-// Constants not found elsewhere
-const (
-	IFNAMSIZ   = 16 // Max interface name length
-	MAXBUFSIZE = 1518
-)
-
 type EtherHeader struct {
 }
+
+type bpf_timeval struct {
+	tv_sec  int32
+	tv_usec int32
+}
+
+const (
+	BPFH_TSTAMP_SEC  = iota
+	BPFH_TSTAMP_USEC = BPFH_TSTAMP_SEC + 4
+	BPFH_CAPLEN      = BPFH_TSTAMP_USEC + 4
+	BPFH_DATALEN     = BPFH_CAPLEN + 4
+	BPFH_HDRLEN      = BPFH_DATALEN + 4
+	BPFH_MINSIZE     = BPFH_HDRLEN + 2
+)
+
+// // struct BPF_TIMEVAL bh_tstamp;
+// type bpf_hdr struct {
+// 	bh_tstamp  bpf_timeval
+// 	bh_caplen  uint32 // length of captured portion
+// 	bh_datalen uint32 // original length of packet
+// 	bh_hdrlen  uint16 // length of bpf header (this struct plus alignment padding
+// }
 
 // struct frame_t {
 // struct ether_header header;
@@ -30,6 +47,12 @@ type EtherHeader struct {
 // ssize_t len;
 // ssize_t payload_len;
 // }
+
+// Constants not found elsewhere
+const (
+	IFNAMSIZ   = 16 // Max interface name length
+	MAXBUFSIZE = 1518 + BPFH_MINSIZE + 2
+)
 
 type ivalue struct {
 	name  [IFNAMSIZ]byte
@@ -51,9 +74,20 @@ type SockFprog struct {
 // ReadPacket from the interface
 func (sock IntfSocket) ReadPacket() ([]byte, syscall.Sockaddr, error) {
 	b := make([]byte, MAXBUFSIZE)
-	//sys	Read(fd int, p []byte) (n int, err error)
 	n, err := syscall.Read(sock.fd, b)
-	fmt.Fprintf(os.Stderr, "INFO: ReadPacket len %d\n", n)
+	if n < BPFH_MINSIZE {
+		fmt.Fprintf(os.Stderr, "ERROR: ReadPacket len %d < sizeof(bpf_hdr)\n", n)
+		return nil, nil, syscall.Errno(syscall.EINVAL)
+	}
+	caplen := ntohl(pkt.GetUInt32(b[BPFH_CAPLEN:]))
+	datalen := ntohl(pkt.GetUInt32(b[BPFH_DATALEN:]))
+	bhlen := int(ntohs(pkt.GetUInt16(b[BPFH_HDRLEN:])))
+	if bhlen > n {
+		fmt.Fprintf(os.Stderr, "ERROR: ReadPacket short read len %d bhlen %d\n", n, bhlen)
+		return nil, nil, syscall.Errno(syscall.EINVAL)
+	}
+	b = b[bhlen:n]
+	fmt.Fprintf(os.Stderr, "INFO: ReadPacket read len %d bhlen %d caplen %d datalen %d bufsize %d\n", n, bhlen, caplen, datalen, len(b))
 	return b, nil, err
 }
 
@@ -121,7 +155,7 @@ func NewInterfaceSocket(ifname string) (IntfSocket, error) {
 	}
 
 	// This must be done before SETIF
-	ival = 1518
+	ival = MAXBUFSIZE
 	if err = fdioctl(rv.fd, syscall.BIOCSBLEN, ivalp); err != nil {
 		fmt.Fprintf(os.Stderr, "Error BIOCSBLEN: %s\n", err)
 		return rv, err
