@@ -5,7 +5,7 @@
 
 * Go IS-IS Routing Protocol
 This is a partial implementation of the IS-IS routing protocol (ISO 10589:2002)
-written in Go
+written in Go. Runs on Linux, OS X, *BSD.
 
  Yes, this is what I occupy my time with for fun on PTO. :)
 

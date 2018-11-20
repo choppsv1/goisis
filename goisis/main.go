@@ -23,7 +23,15 @@ var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 // GlbDebug are the enable debug.
 var GlbDebug = DbgFPkt | DbgFAdj
 
+// GlbLinkDB is the link database
+var GlbLinkDB *LinkDB
+
 //var GlbDebug DbgFlag
+
+// Slicer grabs a slice from a byte slice given a start and length.
+func Slicer(b []byte, start int, length int) []byte {
+	return b[start : start+length]
+}
 
 func main() {
 	var err error
@@ -39,7 +47,9 @@ func main() {
 		return
 	}
 
-	linkdb := NewLinkDB()
+	GlbLinkDB = NewLinkDB()
+	linkdb := GlbLinkDB
+
 	quit := make(chan bool)
 	GlbSystemID, err = net.ParseMAC(*sysIDPtr)
 

@@ -192,11 +192,9 @@ func (link *LANLink) ProcessPacket(frame *RecvFrame) error {
 	case clns.PDUTypeIIHLANL2:
 		return RecvLANHello(link, frame, payload, level, tlvs)
 	case clns.PDUTypeLSPL1:
-		debug(DbgFPkt, "INFO: ignoring LSPL1 on %s for now", link)
-		return nil
+		return RecvLSP(link, frame, payload, 1, tlvs)
 	case clns.PDUTypeLSPL2:
-		debug(DbgFPkt, "INFO: ignoring LSPL2 on %s for now", link)
-		return nil
+		return RecvLSP(link, frame, payload, 2, tlvs)
 	case clns.PDUTypeCSNPL1:
 		debug(DbgFPkt, "INFO: ignoring CSNPL1 on %s for now", link)
 		return nil

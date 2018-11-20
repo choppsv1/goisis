@@ -285,6 +285,23 @@ type NodeID [NodeIDLen]byte
 // segments to describe an full LSP.
 type LSPID [LSPIDLen]byte
 
+func (id SystemID) String() string {
+	return ISOString(id[:SysIDLen], false)
+}
+
+func (id NodeID) String() string {
+	return ISOString(id[:NodeIDLen], true)
+}
+
+func (id LSPID) String() string {
+	return ISOString(id[:LSPIDLen], true)
+}
+
+// LSPIDString prints a LSPID given a generic byte slice.
+func LSPIDString(id []byte) string {
+	return ISOString(id[:LSPIDLen], true)
+}
+
 //
 // ISOString returns a string representation of an ISO address (e.g., system ID
 // or an area address etc), these take the form [xx.]xxxx[.xxxx.xxxx] or

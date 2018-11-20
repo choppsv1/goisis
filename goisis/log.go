@@ -14,6 +14,7 @@ type DbgFlag int
 const (
 	DbgFPkt DbgFlag = 1 << iota
 	DbgFAdj
+	DbgFUpd
 )
 
 var dlogger = log.New(os.Stderr, "DEBUG:", log.Ldate|log.Ltime|log.Lmicroseconds)
@@ -23,4 +24,8 @@ func debug(flag DbgFlag, format string, a ...interface{}) {
 	if (flag & GlbDebug) != 0 {
 		dlogger.Printf(format, a...)
 	}
+}
+
+func logit(format string, a ...interface{}) {
+	logger.Printf(format, a...)
 }
