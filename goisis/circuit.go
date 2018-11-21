@@ -63,6 +63,7 @@ type PDU struct {
 	payload []byte
 	pdutype clns.PDUType
 	level   clns.Level
+	lindex  clns.LIndex
 	tlvs    map[tlv.Type][]tlv.Data
 }
 
@@ -86,7 +87,6 @@ type CircuitBase struct {
 	v4addrs []net.IPNet
 	v6addrs []net.IPNet
 	iihpkt  chan<- *RecvPDU
-	lsppkt  chan<- *RecvPDU
 	snppkt  chan<- *RecvPDU
 	outpkt  chan []byte
 	quit    <-chan bool
@@ -99,13 +99,12 @@ func (cb *CircuitBase) String() string {
 //
 // NewCircuitBase allocates and initializes a new CircuitBase structure.
 //
-func NewCircuitBase(ifname string, levelf clns.LevelFlag, iihpkt, lsppkt, snppkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
+func NewCircuitBase(ifname string, levelf clns.LevelFlag, iihpkt, snppkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
 	var err error
 
 	cb := &CircuitBase{
 		levelf: levelf,
 		iihpkt: iihpkt,
-		lsppkt: lsppkt,
 		snppkt: snppkt,
 		outpkt: make(chan []byte),
 		quit:   quit,

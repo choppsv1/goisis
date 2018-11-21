@@ -10,7 +10,6 @@ import (
 type CircuitDB struct {
 	links   map[string]interface{}
 	iihpkts chan *RecvPDU
-	lsppkts chan *RecvPDU
 	snppkts chan *RecvPDU
 }
 
@@ -21,7 +20,6 @@ func NewCircuitDB() *CircuitDB {
 	cdb := new(CircuitDB)
 	cdb.links = make(map[string]interface{})
 	cdb.iihpkts = make(chan *RecvPDU)
-	cdb.lsppkts = make(chan *RecvPDU)
 	cdb.snppkts = make(chan *RecvPDU)
 	return cdb
 }
@@ -33,7 +31,6 @@ func (cdb *CircuitDB) NewCircuit(ifname string, levelf clns.LevelFlag) (*Circuit
 	cb, err := NewCircuitBase(ifname,
 		levelf,
 		cdb.iihpkts,
-		cdb.lsppkts,
 		cdb.snppkts,
 		GlbQuit)
 	if err != nil {

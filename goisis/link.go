@@ -28,7 +28,6 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 //
 type Link interface {
 	// new
-	ProcessLSP(*RecvPDU) error
 	ProcessSNP(*RecvPDU) error
 	UpdateAdj(*RecvPDU) error
 

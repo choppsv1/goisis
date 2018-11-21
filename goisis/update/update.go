@@ -37,7 +37,7 @@ type inputGetSNP struct {
 
 // DB holds all LSP for a given level.
 type DB struct {
-	cin       chan inputPDU
+	lspC      chan inputPDU
 	cgetlsp   chan inputGetLSP
 	cgetsnp   chan inputGetSNP
 	expireLSP chan clns.LSPID
@@ -64,11 +64,13 @@ type lspSegment struct {
 func NewDB(lindex clns.LIndex,
 	setsrm func(*clns.LSPID),
 	debug func(string, ...interface{})) *DB {
+	fmt.Printf("UPD: debug: %q", debug)
 	db := &DB{
+		debug:     debug,
 		lindex:    lindex,
 		db:        make(map[clns.LSPID]*lspSegment),
 		setsrm:    setsrm,
-		cin:       make(chan inputPDU),
+		lspC:      make(chan inputPDU),
 		cgetlsp:   make(chan inputGetLSP),
 		cgetsnp:   make(chan inputGetSNP),
 		expireLSP: make(chan clns.LSPID),
@@ -81,8 +83,8 @@ func NewDB(lindex clns.LIndex,
 //
 
 // InputPDU creates or updates an LSP in the update DB.
-func (db *DB) InputPDU(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
-	db.cin <- inputPDU{payload, pdutype, tlvs}
+func (db *DB) InputLSP(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
+	db.lspC <- inputPDU{payload, pdutype, tlvs}
 }
 
 // CopyLSPPayload copies the LSP payload buffer for sending if found and returns
@@ -108,11 +110,12 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 // Internal Functionality only called in the update go routine, no locking required.
 //
 
-// StringLocked returns a string identifying the LSP DB lock must be held
-func (lsp *lspSegment) stringLocked() string {
+// String returns a string identifying the LSP DB lock must be held
+func (lsp *lspSegment) String() string {
+	s := clns.ISOString(lsp.getLSPID(), false)
 	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v cksum:%#04x",
-		clns.ISOString(lsp.getLSPID(), false),
-		lsp.getSeqNoLocked(),
+		s,
+		lsp.getSeqNo(),
 		lsp.getLifetime(),
 		lsp.getCksum())
 }
@@ -133,14 +136,16 @@ func (db *DB) newLSPSegment(payload []byte, pdutype clns.PDUType, tlvs map[tlv.T
 	lsp.holdTimer = time.AfterFunc(lsp.lifetime.Remaining(),
 		func() { db.expireLSP <- lsp.lspid })
 
+	db.debug("New LSP")
+	db.debug("New LSP: %s", lsp)
 	// // We aren't locked but this isn't in the DB yet.
-	// if lsp.isOursLocked() {
+	// if lsp.isOurs() {
 	//      lsp.refreshTimer = time.NewTimer(lsp.lifetime.Remainingg())
 	// }
 	return lsp
 }
 
-func (lsp *lspSegment) getSeqNoLocked() uint32 {
+func (lsp *lspSegment) getSeqNo() uint32 {
 	return pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:])
 }
 
@@ -164,7 +169,7 @@ func (lsp *lspSegment) getLSPID() []byte {
 	return lsp.hdr[clns.HdrLSPLSPID : clns.HdrLSPLSPID+clns.LSPIDLen]
 }
 
-// func (lsp *lspSegment) isOursLocked() bool {
+// func (lsp *lspSegment) isOurs() bool {
 // 	return bytes.Equal(lsp.getLSPID()[:clns.SysIDLen], GlbSystemID)
 // }
 
@@ -189,7 +194,7 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 	pkt.PutUInt16(lsp.hdr[:clns.HdrLSPLifetime], 0)
 
 	if db.debug != nil {
-		db.debug("Lifetime for %s expired, purging.", lsp.stringLocked())
+		db.debug("Lifetime for %s expired, purging.", lsp)
 	}
 
 	lsp.zeroLifetime = xtime.NewTimeout(clns.ZeroMaxAgeDur)
@@ -239,8 +244,7 @@ func (db *DB) updateLSPLifetime(lsp *lspSegment) {
 // updateLSP updates an lspSegment with a newer version received on a link.
 func (db *DB) updateLSP(lsp *lspSegment, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
 	if db.debug != nil {
-		s := lsp.stringLocked()
-		db.debug("Updating %s", s)
+		db.debug("Updating %s", lsp)
 	}
 	// XXX I think this is wrong... we need to understand this better.
 	if !lsp.holdTimer.Stop() {
@@ -267,7 +271,7 @@ func (db *DB) updateLSP(lsp *lspSegment, payload []byte, pdutype clns.PDUType, t
 	lsp.lifetime.Reset(lifetime)
 	lsp.holdTimer.Reset(lifetime)
 
-	// if lsp.isOursLocked() {
+	// if lsp.isOurs() {
 	// 	// assert(lsp.refreshTimer != nil)
 	// 	timeleft := lifetime * 3 / 4
 	// 	// assert timeleft
@@ -284,7 +288,7 @@ func (db *DB) updateLSP(lsp *lspSegment, payload []byte, pdutype clns.PDUType, t
 
 func (db *DB) runOnce() {
 	select {
-	case in := <-db.cin:
+	case in := <-db.lspC:
 		var lspid clns.LSPID
 		copy(lspid[:], in.payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
 		lsp, ok := db.db[lspid]

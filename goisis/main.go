@@ -24,7 +24,7 @@ var GlbAreaID []byte
 var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 
 // GlbDebug are the enable debug.
-var GlbDebug = DbgFPkt | DbgFAdj
+var GlbDebug DbgFlags
 
 // GlbCDB is the global circuit DB for this instance
 var GlbCDB = NewCircuitDB()
@@ -59,7 +59,7 @@ func main() {
 	//
 	// Initialize Debug
 	//
-	GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS
+	GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS | DbgFUpd
 
 	//
 	// Initialize System and AreaIDs
@@ -97,10 +97,12 @@ func main() {
 		debug(DbgFUpd, format, a)
 	}
 	if !debugIsSet(DbgFUpd) {
-		dbdebug = nil
+		dbdebug = func(format string, a ...interface{}) {}
 	}
 	for i := clns.LIndex(0); i < 2; i++ {
-		GlbUpdateDB[i] = update.NewDB(i, GlbCDB.SetAllSRM, dbdebug)
+		if GlbISType.IsLevelEnabled(i.ToLevel()) {
+			GlbUpdateDB[i] = update.NewDB(i, GlbCDB.SetAllSRM, dbdebug)
+		}
 	}
 
 	quit := make(chan bool)
@@ -118,6 +120,11 @@ func main() {
 			os.Exit(1)
 		}
 		GlbCDB.links[ifname] = lanlink
+	}
+	for _, db := range GlbUpdateDB {
+		if db != nil {
+			go db.Run()
+		}
 	}
 
 	processPDUs(GlbCDB)
