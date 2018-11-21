@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/tlv"
@@ -12,8 +13,8 @@ import (
 // AdjDB stores the adjacencies for a given level on a given link.
 // ---------------------------------------------------------------
 type AdjDB struct {
-	level    int
-	lindex   int
+	level    clns.LevelType
+	lindex   uint8
 	link     Link
 	lock     sync.Mutex
 	snpaMap  map[[clns.SNPALen]byte]*Adj
@@ -24,10 +25,10 @@ type AdjDB struct {
 // NewAdjDB creates and initializes a new adjacency database for a given link
 // and level.
 // --------------------------------------------------------------------------
-func NewAdjDB(link Link, level int) *AdjDB {
+func NewAdjDB(link Link, level clns.LevelType) *AdjDB {
 	db := new(AdjDB)
 	db.level = level
-	db.lindex = level - 1
+	db.lindex = level.ToIndex()
 	db.link = link
 	db.snpaMap = make(map[[clns.SNPALen]byte]*Adj)
 	db.srcidMap = make(map[[clns.SysIDLen]byte]*Adj)
@@ -65,6 +66,23 @@ func (db *AdjDB) HasUpAdj() bool {
 	for _, a := range db.srcidMap {
 		if a.State == AdjStateUp {
 			return true
+		}
+	}
+	return false
+}
+
+// -----------------------------------------------------------
+// HasUpAdj returns true if the DB contains any Up adjacencies
+// -----------------------------------------------------------
+func (db *AdjDB) HasUpAdjSNPA(snpa net.HardwareAddr) bool {
+	db.lock.Lock()
+	defer db.lock.Unlock()
+
+	for _, a := range db.srcidMap {
+		if a.State == AdjStateUp {
+			if bytes.Equal(snpa, a.snpa[:]) {
+				return true
+			}
 		}
 	}
 	return false

@@ -11,6 +11,9 @@ import (
 )
 
 // GlbSystemID is the system ID of this IS-IS instance
+var GlbLevelEnabled clns.LevelEnableType
+
+// GlbSystemID is the system ID of this IS-IS instance
 var GlbSystemID net.HardwareAddr
 
 // GlbAreaID is the area this IS-IS instance is in.
@@ -40,6 +43,7 @@ func main() {
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
 	sysIDPtr := flag.String("sysid", "00:00:00:00:00:01", "system id of this instance")
+	isTypePtr := flag.String("istype", "level-1", "level-1, level-1-2, level-2-only")
 	flag.Parse()
 
 	if *playPtr {
@@ -56,6 +60,21 @@ func main() {
 	// XXX eventually support custom areas
 	GlbAreaID = make([]byte, 1)
 	GlbAreaID[0] = 0x00
+
+	switch *isTypePtr {
+	case "level-1":
+		GlbLevelEnabled = clns.LETLevel1
+		break
+	case "level-2-only":
+		GlbLevelEnabled = clns.LETLevel2
+		break
+	case "level-1-2":
+		GlbLevelEnabled = clns.LETLevel12
+		break
+	default:
+		panic(fmt.Sprintf("Invalid istype %s", *isTypePtr))
+	}
+	fmt.Printf("IS-IS %s router\n", GlbLevelEnabled)
 
 	// Get interfaces to run on.
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)

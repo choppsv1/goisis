@@ -14,7 +14,7 @@ import (
 // SendHellos is a go routine that watches for hello timer events and sends
 // hellos when they are received.
 // ------------------------------------------------------------------------
-func SendLANHellos(link *LANLink, interval int, quit chan bool) error {
+func SendLANHellos(link *LANLink, interval uint, quit chan bool) error {
 	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, interval)
 	ival := time.Second * time.Duration(interval)
 	ticker := time.NewTicker(ival) // XXX replace with jittered timer.
@@ -130,7 +130,7 @@ func (e ErrIIH) Error() string {
 // --------------------------------------------------
 // RecvLANHello receives IIH from on a given LAN link
 // --------------------------------------------------
-func RecvLANHello(link *LANLink, frame *RecvFrame, payload []byte, level int, tlvs map[tlv.Type][]tlv.Data) error {
+func RecvLANHello(link *LANLink, frame *RecvFrame, payload []byte, level clns.LevelType, tlvs map[tlv.Type][]tlv.Data) error {
 	debug(DbgFPkt, "IIH: processign from %s", ether.Frame(frame.pkt).GetSrc())
 
 	// For level 1 we must be in the same area.

@@ -46,8 +46,8 @@ type Adj struct {
 	lanid     [clns.LANIDLen]byte
 	areas     [][]byte
 	db        *AdjDB
-	level     int //  need to change this to circtype for p2p
-	lindex    int
+	level     clns.LevelType //  need to change this to LevelEnableType for p2p
+	lindex    uint8
 	priority  uint8
 	hold      uint16
 	holdTimer *time.Timer

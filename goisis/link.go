@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/raw"
 	"github.com/choppsv1/goisis/tlv"
@@ -16,10 +17,15 @@ import (
 // Link is an IS-IS/CLNS interface.
 // ================================
 type Link interface {
-	DISInfoChanged(level int)
+	DISInfoChanged(level clns.LevelType)
 	GetOurSNPA() net.HardwareAddr
 	ProcessPacket(*RecvFrame) error
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
+	SetFlag(seg *LSPSegment, flag SxxFlag)
+	ClearFlag(seg *LSPSegment, flag SxxFlag)
+	GetFlags(lindex uint8, flag SxxFlag) FlagSet
+	HandleSRM(seg *LSPSegment)
+	HandleSSN(seg *LSPSegment)
 }
 
 // --------------------------------------------------------
@@ -35,14 +41,15 @@ type RecvFrame struct {
 // LinkCommon collects common functionality from all types of links
 // ----------------------------------------------------------------
 type LinkCommon struct {
-	link    Link
-	intf    *net.Interface
-	sock    raw.IntfSocket
-	v4addrs []net.IPNet
-	v6addrs []net.IPNet
-	inpkt   chan<- *RecvFrame
-	outpkt  chan []byte
-	quit    <-chan bool
+	link     Link
+	intf     *net.Interface
+	sock     raw.IntfSocket
+	sxxFlags [2][2]FlagSet
+	v4addrs  []net.IPNet
+	v6addrs  []net.IPNet
+	inpkt    chan<- *RecvFrame
+	outpkt   chan []byte
+	quit     <-chan bool
 }
 
 func (common *LinkCommon) String() string {
@@ -107,7 +114,11 @@ func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) 
 	var err error
 
 	common := &LinkCommon{
-		link:   link,
+		link: link,
+		sxxFlags: [2][2]FlagSet{
+			{NewFlagSet(), NewFlagSet()},
+			{NewFlagSet(), NewFlagSet()},
+		},
 		inpkt:  inpkt,
 		outpkt: make(chan []byte),
 		quit:   quit,
@@ -172,4 +183,16 @@ func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) 
 	go common.writePackets()
 
 	return common, nil
+}
+
+func (l *LinkCommon) SetFlag(seg *LSPSegment, flag SxxFlag) {
+	l.sxxFlags[seg.lindex][flag].Add(seg.lspid)
+}
+
+func (l *LinkCommon) ClearFlag(seg *LSPSegment, flag SxxFlag) {
+	l.sxxFlags[seg.lindex][flag].Remove(seg.lspid)
+}
+
+func (l *LinkCommon) GetFlags(lindex uint8, flag SxxFlag) FlagSet {
+	return l.sxxFlags[lindex][flag]
 }

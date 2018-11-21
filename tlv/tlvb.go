@@ -5,6 +5,7 @@
 package tlv
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"reflect"
@@ -194,11 +195,13 @@ func (e ErrTLVSpaceCorrupt) Error() string {
 	return fmt.Sprintf("%s", string(e))
 }
 
+type TLVMap map[Type][]Data
+
 // ParseTLV returns a map of slices of TLVs of by TLV Type. This validates the
 // TLV lengths at the topmost level; however, it does not validate that the
 // length is correct for the TLV type or that the data is correct.
-func (b Data) ParseTLV() (map[Type][]Data, error) {
-	tlv := make(map[Type][]Data)
+func (b Data) ParseTLV() (TLVMap, error) {
+	tlv := make(TLVMap)
 
 	tlvp := b
 	for len(tlvp) > 1 {
@@ -270,6 +273,18 @@ func (b Data) RouterIDValue() (net.IP, error) {
 // NLPIDValues returns a slice of NLPID values.
 func (b Data) NLPIDValues(nlpids *[]NLPID) error {
 	return b.newFixedValues(1, nlpids)
+}
+
+// LSPBufSizeValue returns the value found in the TLV.
+func (b Data) LSPBufSizeValue() (uint16, error) {
+	_, l, v, err := GetTLV(b)
+	if err != nil {
+		return 0, err
+	}
+	if l != 2 {
+		return 0, fmt.Errorf("Length of data %d is not 2", l)
+	}
+	return binary.BigEndian.Uint16(v), nil
 }
 
 // =======================

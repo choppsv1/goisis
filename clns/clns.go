@@ -119,6 +119,7 @@ const (
 // ======================================================
 // Protocol constants for various headers and structures.
 // ======================================================
+
 const (
 	LLCSSAP        = 0xfe
 	LLCDSAP        = 0xfe
@@ -151,6 +152,56 @@ const (
 // ====================================
 // Protocol Types and Support Functions
 // ====================================
+
+type LevelType uint8
+
+const (
+	Level1 LevelType = 1
+	Level2           = 2
+)
+
+func (level LevelType) String() string {
+	return fmt.Sprintf("level-%d", level)
+}
+
+func (level LevelType) ToIndex() uint8 {
+	if level < 1 || level > 2 {
+		panic(fmt.Sprintf("Invalid level %d", level))
+	}
+	return uint8(level) - 1
+}
+
+func (level LevelType) ToEnabled() LevelEnableType {
+	return LevelToEnabled(level)
+}
+
+type LevelEnableType uint8
+
+const (
+	LETLevel1 LevelEnableType = iota
+	LETLevel2
+	LETLevel12
+)
+
+func (enabled LevelEnableType) String() string {
+	switch enabled {
+	case LETLevel1:
+		return "level-1"
+	case LETLevel2:
+		return "level-2-only"
+	case LETLevel12:
+		return "level-1-2"
+	}
+	return fmt.Sprintf("Invalid level enabled %d", enabled)
+}
+
+func LevelToEnabled(level LevelType) LevelEnableType {
+	return LevelEnableType(1 << (level - 1))
+}
+
+func (enabled LevelEnableType) IsLevelEnabled(level LevelType) bool {
+	return (LevelToEnabled(level) & enabled) != 0
+}
 
 // PDUType represents a PDU type
 type PDUType uint8
@@ -247,7 +298,7 @@ var PDUTLVOffMap = map[PDUType]int{
 //
 // PDULevelMap maps PDU types to levels (if possible).
 //
-var PDULevelMap = map[PDUType]int{
+var PDULevelMap = map[PDUType]LevelType{
 	PDUTypeIIHLANL1: 1,
 	PDUTypeIIHLANL2: 2,
 	PDUTypeLSPL1:    1,
@@ -366,10 +417,10 @@ func (e ErrInvalidPacket) Error() string {
 }
 
 // ValidatePacket validates (to an extent) a CLNS payload, and returns a correct
-// version of it. (ISO10589 8.4.2.1)
+// version of it. (ISO10589 8.4.2.1 and 7.3.15.{1,2}: 2, 3, 4, 5)
 // Checked Valid Items:  PDU Type, Header Length, PDU Length, Advertised
-// versions(*), Advertised sizes(*) -- (*) XXX finish
-func ValidatePacket(payload []byte) ([]byte, error) {
+// versions(*), Advertised sizes -- (*) XXX finish
+func ValidatePacket(payload []byte, istype, ctype LevelEnableType) ([]byte, error) {
 	pdutype, err := GetPDUType(payload)
 	if err != nil {
 		return nil, err
@@ -397,5 +448,32 @@ func ValidatePacket(payload []byte) ([]byte, error) {
 		}
 		payload = payload[:pdulen+HdrLLCSize]
 	}
+
+	level, ok := PDULevelMap[pdutype]
+	if ok {
+		// P2PHello won't have a level, don't fail
+		// ISO10589: 7.3.15.1: 2
+		if !istype.IsLevelEnabled(level) {
+			return nil, nil
+		}
+		// ISO10589: 7.3.15.1: 3
+		if !ctype.IsLevelEnabled(level) {
+			return nil, nil
+		}
+	}
+
+	// ISO10589: 7.3.15.1: 4
+	sysidlen := payload[HdrCLNSSysIDLen]
+	if sysidlen != 0 && sysidlen != 6 {
+		return nil, ErrInvalidPacket(
+			fmt.Sprintf("TRAP iDFieldLengthMismtach: %d", sysidlen))
+	}
+	// ISO10589 7.3.15.1: 5)
+	maxarea := payload[HdrCLNSMaxArea]
+	if maxarea != 0 && maxarea != 3 {
+		return nil, ErrInvalidPacket(
+			fmt.Sprintf("TRAP maximumAreaAddressesMismatch %d", maxarea))
+	}
+
 	return payload, nil
 }

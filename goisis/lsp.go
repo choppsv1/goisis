@@ -23,25 +23,28 @@ type LSPSegment struct {
 	life     *HoldTimer
 	zeroLife *HoldTimer
 	isAck    bool
-	lindex   int
-	level    int
+	lindex   uint8
+	level    clns.LevelType
+	lspid    clns.LSPID
 	lsphdr   []byte
 	payload  []byte
 	tlvs     map[tlv.Type][]tlv.Data
 }
 
-func NewLSPSegment(frame *RecvFrame, payload []byte, level int, tlvs map[tlv.Type][]tlv.Data) (*LSPSegment, error) {
+func NewLSPSegment(frame *RecvFrame, payload []byte, level clns.LevelType, tlvs map[tlv.Type][]tlv.Data) (*LSPSegment, error) {
 	seg := &LSPSegment{
-		lindex:  level - 1,
 		level:   level,
+		lindex:  level.ToIndex(),
 		payload: payload,
 		lsphdr:  Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize),
 		tlvs:    tlvs,
 	}
+	copy(seg.lspid[:], seg.lsphdr[clns.HdrLSPLSPID:])
 
-	// XXX what if it's zero?
+	// XXX what if it's zero? I think we set to LSP_MAX_AGE but for zero timer
+
 	seg.life = NewHoldTimer(pkt.GetUInt16(seg.lsphdr[clns.HdrLSPLifetime:]),
-		func() { Expire(seg) })
+		func() { Expire(seg.lindex, seg.lspid) })
 
 	return seg, nil
 }
@@ -56,12 +59,13 @@ func (seg *LSPSegment) String() string {
 
 // PurgeExpired is called when the holdtimer has fired to initiate a purge.
 func (seg *LSPSegment) PurgeExpired() {
-	//-----------------------------
+
+	// ---------------------------
 	// ISO10589: 7.3.16.4: a, b, c
-	//----------------------------
+	// ---------------------------
 
 	// a)
-	SetAllSRM(seg)
+	SetAllSRM(seg, nil)
 
 	// b) Retain only LSP header.
 	// XXX Add in PurgeTLV and others

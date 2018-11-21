@@ -21,10 +21,10 @@ var ourSNPA = make(map[ether.MAC]bool)
 // ---------------------------------------------------------------
 type LANLink struct {
 	*LinkCommon
-	level     int
-	lindex    int //  level - 1 for array indexing
-	helloInt  int
-	holdMult  int
+	level     clns.LevelType
+	lindex    uint8 //  level - 1 for array indexing
+	helloInt  uint
+	holdMult  uint
 	lclCircID uint8
 	lanID     [clns.LANIDLen]byte
 	adjdb     *AdjDB
@@ -44,12 +44,12 @@ func (link *LANLink) GetOurSNPA() net.HardwareAddr {
 // ------------------------------------------------------
 // NewLANLink creates a LAN link for a given IS-IS level.
 // ------------------------------------------------------
-func NewLANLink(ifname string, inpkt chan<- *RecvFrame, quit chan bool, level int) (*LANLink, error) {
+func NewLANLink(ifname string, inpkt chan<- *RecvFrame, quit chan bool, level clns.LevelType) (*LANLink, error) {
 	var err error
 
 	link := &LANLink{
 		level:    level,
-		lindex:   level - 1,
+		lindex:   level.ToIndex(),
 		helloInt: clns.DefHelloInt,
 		holdMult: clns.DefHelloMult,
 	}
@@ -165,9 +165,15 @@ func (link *LANLink) ProcessPacket(frame *RecvFrame) error {
 		}
 	}
 
-	payload, err = clns.ValidatePacket(payload)
+	// ISO10589: 8.4.2.1 and
+	// ISO10589: 7.3.15.{1,2}: 2, 3, 4, 5, 7, 8 (6 is below)
+	payload, err = clns.ValidatePacket(payload, GlbLevelEnabled, link.level.ToEnabled())
 	if err != nil {
 		return err
+	}
+	if payload == nil {
+		debug(DbgFPkt, "PDU %s valid but not for us on %s", pdutype, link)
+		return nil
 	}
 
 	pdutype, err = clns.GetPDUType(payload)
@@ -191,6 +197,16 @@ func (link *LANLink) ProcessPacket(frame *RecvFrame) error {
 		return RecvLANHello(link, frame, payload, level, tlvs)
 	case clns.PDUTypeIIHLANL2:
 		return RecvLANHello(link, frame, payload, level, tlvs)
+	}
+
+	// ISO10589: 7.3.15.1: 6
+	snpa := ether.Frame(frame.pkt).GetSrc()
+	if !link.adjdb.HasUpAdjSNPA(snpa) {
+		debug(DbgFUpd, "Dropping %s from %s no UP adj with %s", pdutype, snpa)
+		return nil
+	}
+
+	switch pdutype {
 	case clns.PDUTypeLSPL1:
 		return RecvLSP(link, frame, payload, 1, tlvs)
 	case clns.PDUTypeLSPL2:
@@ -221,7 +237,7 @@ func (link *LANLink) ProcessPacket(frame *RecvFrame) error {
 // DISInfoChanged is called when something has happened to require rerunning of
 // DIS election on this LAN.
 // ----------------------------------------------------------------------------
-func (link *LANLink) DISInfoChanged(level int) {
+func (link *LANLink) DISInfoChanged(level clns.LevelType) {
 	// XXX
 }
 
@@ -247,4 +263,16 @@ func (link *LANLink) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error 
 		}
 	}
 	return nil
+}
+
+func (link *LANLink) HandleSRM(seg *LSPSegment) {
+	debug(DbgFUpd, "SRM %s on link %s", seg, link)
+	// XXX actually send it.
+	link.ClearFlag(seg, SRM)
+}
+
+func (link *LANLink) HandleSSN(seg *LSPSegment) {
+	debug(DbgFUpd, "SSN %s on link %s", seg, link)
+	// XXX actually send it.
+	link.ClearFlag(seg, SSN)
 }

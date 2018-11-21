@@ -15,10 +15,13 @@ cat > /etc/quagga/isisd.conf <<EOIF
     enable password lab
     interface eth1
       ip router isis ring
+      isis hello-interval 10
+      isis csnp-interval 10
     interface lo
     router isis ring
       net 00.0000.0000.0010.00
       metric-style wide
+      is-type level-1
     line vty
 EOIF
 
