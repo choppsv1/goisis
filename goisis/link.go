@@ -356,13 +356,18 @@ func (link *LinkLAN) SetFlag(flag FlagIndex, lspid *clns.LSPID) {
 }
 
 // _processFlags is the guts of the sendLSP function
+// Replace this with use of channels and no locking.
 func (link *LinkLAN) _processFlags() {
 	link.flagCond.L.Lock()
 	llen := len(link.flags[SRM])
 	plen := len(link.flags[SSN])
+	debug(DbgFFlags, "LSP flags on %s, llen %d plen %d", link, llen, plen)
 	for llen+plen == 0 {
 		debug(DbgFFlags, "Waiting for LSP flags on %s", link)
 		link.flagCond.Wait()
+		llen = len(link.flags[SRM])
+		plen = len(link.flags[SSN])
+		debug(DbgFFlags, "Wakeup for LSP flags on %s, llen %d plen %d", link, llen, plen)
 	}
 
 	// ---------------------------------
@@ -423,7 +428,10 @@ func (link *LinkLAN) processFlags() {
 // fillSNPLocked is called to fill a SNP packet with SNPEntries the flagCond
 // Lock has is held.
 func (link *LinkLAN) fillSNPLocked(tlvp tlv.Data) tlv.Data {
-	track, _ := tlv.Open(tlvp, tlv.TypeSNPEntries, nil)
+	track, err := tlv.Open(tlvp, tlv.TypeSNPEntries, nil)
+	if err != nil {
+		panic("No TLV space with new PDU")
+	}
 	for lspid := range link.flags[SSN] {
 		var err error
 		var p tlv.Data

@@ -91,6 +91,7 @@ func (db *DB) CopyLSPPayload(lspid *clns.LSPID, payload []byte) int {
 	result := make(chan int)
 	db.cgetlsp <- inputGetLSP{lspid, payload, result}
 	l := <-result
+	close(result)
 	return l
 }
 
@@ -99,6 +100,7 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 	result := make(chan bool)
 	db.cgetsnp <- inputGetSNP{lspid, ent, result}
 	found := <-result
+	close(result)
 	return found
 }
 
