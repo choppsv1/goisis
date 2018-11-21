@@ -1,198 +1,465 @@
+// -*- coding: us-ascii-unix -*-
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
-	"github.com/choppsv1/goisis/raw"
+	"github.com/choppsv1/goisis/goisis/update"
 	"github.com/choppsv1/goisis/tlv"
-	"golang.org/x/net/bpf"
-	"io"
-	"net"
-	"os"
-	"syscall"
+	"sync"
+	"time"
 )
 
-// ================================
-// Link is an IS-IS/CLNS interface.
-// ================================
+// =======
+// Globals
+// =======
+
+// lanLinkCircuitIDs is used to allocate circuit IDs
+var lanLinkCircuitIDs = [2]byte{0, 0}
+
+// ==========
+// Interfaces
+// ==========
+
+//
+// Link represents level dependent operations on a circuit.
+//
 type Link interface {
-	DISInfoChanged(level clns.LevelType)
-	GetOurSNPA() net.HardwareAddr
-	ProcessPacket(*RecvFrame) error
+	// new
+	ProcessLSP(*RecvPDU) error
+	ProcessSNP(*RecvPDU) error
+	UpdateAdj(*RecvPDU) error
+
+	// same
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
-	SetFlag(seg *LSPSegment, flag SxxFlag)
-	ClearFlag(seg *LSPSegment, flag SxxFlag)
-	GetFlags(lindex uint8, flag SxxFlag) FlagSet
-	HandleSRM(seg *LSPSegment)
-	HandleSSN(seg *LSPSegment)
+
+	// oldupdcode
+	DISInfoChanged()
+	ClearFlag(FlagIndex, *clns.LSPID)
+	ClearFlagLocked(FlagIndex, *clns.LSPID)
+	SetFlag(FlagIndex, *clns.LSPID)
+
+	// newupdcode
+	// SetFlag(seg *LSPSegment, flag SxxFlag)
+	// ClearFlag(seg *LSPSegment, flag SxxFlag)
+	// GetFlags(lindex uint8, flag SxxFlag) FlagSet
+	// HandleSRM(seg *LSPSegment)
+	// HandleSSN(seg *LSPSegment)
 }
 
-// --------------------------------------------------------
-// Frame is a type passed by value for handling raw packets
-// --------------------------------------------------------
-type RecvFrame struct {
-	pkt  []byte
-	from syscall.Sockaddr
-	link Link
+// ClearSRMFlag clears an SRM flag for the given LSPID on the given Link
+func ClearSRMFlag(l Link, lspid *clns.LSPID) {
+	l.ClearFlag(SRM, lspid)
 }
 
-// ----------------------------------------------------------------
-// LinkCommon collects common functionality from all types of links
-// ----------------------------------------------------------------
-type LinkCommon struct {
-	link     Link
-	intf     *net.Interface
-	sock     raw.IntfSocket
-	sxxFlags [2][2]FlagSet
-	v4addrs  []net.IPNet
-	v6addrs  []net.IPNet
-	inpkt    chan<- *RecvFrame
-	outpkt   chan []byte
-	quit     <-chan bool
+// ClearSSNFlag clears an SRM flag for the given LSPID on the given Link
+func ClearSSNFlag(l Link, lspid *clns.LSPID) {
+	l.ClearFlag(SSN, lspid)
 }
 
-func (common *LinkCommon) String() string {
-	return fmt.Sprintf("Link(%s)", common.intf.Name)
+// SetSRMFlag sets an SRM flag for the given LSPID on the given Link
+func SetSRMFlag(l Link, lspid *clns.LSPID) {
+	l.SetFlag(SRM, lspid)
 }
 
-// readPackets is a go routine to read packets from link and input to channel.
-func (common *LinkCommon) readPackets() {
-	var err error
+// SetSSNFlag sets an SRM flag for the given LSPID on the given Link
+func SetSSNFlag(l Link, lspid *clns.LSPID) {
+	l.SetFlag(SSN, lspid)
+}
 
-	debug(DbgFPkt, "Starting to read packets on %s\n", common)
-	for {
-		frame := RecvFrame{
-			link: common.link,
-		}
-		frame.pkt, frame.from, err = common.sock.ReadPacket()
+// =====
+// Types
+// =====
+
+// FlagIndex Update process flooding flags (not true flags)
+type FlagIndex uint8
+
+// Update process flooding flags
+const (
+	SRM FlagIndex = iota
+	SSN
+)
+
+var flagStrings = [2]string{
+	"SRM",
+	"SSN",
+}
+
+func (flag FlagIndex) String() string {
+	return flagStrings[flag]
+}
+
+// SendLSP is the value passed on the sendLSP channel
+type SendLSP struct {
+	lindex clns.LIndex
+	lspid  clns.LSPID
+}
+
+//
+// LinkLAN is a structure holding information on a IS-IS Specific level
+// operation on a LAN link.
+//
+type LinkLAN struct {
+	circuit *CircuitLAN
+	level   clns.Level
+	lindex  clns.LIndex //  level - 1 for array indexing
+
+	// Hello Process
+	helloInt  uint
+	holdMult  uint
+	priority  uint8
+	lclCircID uint8
+	lanID     clns.NodeID
+	ourlanID  clns.NodeID
+	adjdb     *AdjDB
+
+	// Hello Process DIS
+	disTimer       *time.Timer
+	disLock        sync.Mutex
+	disInfoChanged chan bool
+	disElected     bool
+
+	// Update Process
+	lspdb    *update.DB
+	flags    [2]map[clns.LSPID]bool
+	flagLock sync.Mutex
+	flagCond *sync.Cond
+}
+
+func (link *LinkLAN) String() string {
+	return fmt.Sprintf("LANLevelLink(%s level %d)", link.circuit.CircuitBase, link.level)
+}
+
+//
+// NewLinkLAN creates a LAN link for a given IS-IS level.
+//
+func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit <-chan bool) *LinkLAN {
+	link := &LinkLAN{
+		circuit:  c,
+		level:    clns.Level(lindex + 1),
+		lindex:   lindex,
+		priority: clns.DefHelloPri,
+		helloInt: clns.DefHelloInt,
+		holdMult: clns.DefHelloMult,
+		flags: [2]map[clns.LSPID]bool{
+			make(map[clns.LSPID]bool),
+			make(map[clns.LSPID]bool)},
+	}
+	link.flagCond = sync.NewCond(&link.flagLock)
+	link.adjdb = NewAdjDB(link, link.lindex)
+	link.lspdb = GlbUpdateDB[lindex]
+
+	lanLinkCircuitIDs[lindex]++
+	link.lclCircID = lanLinkCircuitIDs[lindex]
+	copy(link.ourlanID[:], GlbSystemID)
+	link.ourlanID[clns.SysIDLen] = link.lclCircID
+	copy(link.lanID[:], link.ourlanID[:])
+
+	// Record our SNPA in the map of our SNPA
+	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true
+
+	// Start Sending Hellos
+	go SendLANHellos(link, link.helloInt, quit)
+
+	// Start DIS election routine
+	go link.startElectingDIS()
+
+	go link.processFlags()
+
+	return link
+}
+
+// -------------------
+// Adjacency Functions
+// -------------------
+
+// UpdateAdj updates an adjacency with the new PDU information.
+func (link *LinkLAN) UpdateAdj(pdu *RecvPDU) error {
+	link.adjdb.UpdateAdj(pdu)
+	return nil
+}
+
+//
+// ReElectDIS is a go routine that waits for events to trigger DIS reelection on
+// the link. Initially this is a timer, and then it's based on changes in the
+// hello process.
+//
+func (link *LinkLAN) startElectingDIS() {
+	link.disInfoChanged = make(chan bool)
+	dur := time.Second * time.Duration(link.helloInt*2)
+	link.disTimer = time.AfterFunc(dur, func() {
+		debug(DbgFDIS, "INFO: %s DIS timer expired", link)
+		link.disLock.Lock()
+		link.disTimer = nil
+		link.disLock.Unlock()
+		link.disInfoChanged <- true
+	})
+	for range link.disInfoChanged {
+		debug(DbgFDIS, "INFO: %s Received disInfoChanged notification", link)
+		link.disElect()
+	}
+}
+
+//
+// DISInfoChanged is called when something has happened to require rerunning of
+// DIS election on this LAN.
+//
+func (link *LinkLAN) DISInfoChanged() {
+	link.disLock.Lock()
+	defer link.disLock.Unlock()
+	if link.disTimer == nil {
+		link.disInfoChanged <- true
+	}
+}
+
+//
+// UpdateAdjState updates the adj state according to the TLV found in the IIH
+//
+func (link *LinkLAN) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error {
+	// Walk neighbor TLVs if we see ourselves mark adjacency Up.
+	for _, ntlv := range tlvs[tlv.TypeISNeighbors] {
+		addrs, err := ntlv.ISNeighborsValue()
 		if err != nil {
-			if err == io.EOF {
-				debug(DbgFPkt, "EOF reading from %s, will stop reading from link\n", common)
-				return
+			logger.Printf("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
+			return err
+		}
+		for _, snpa := range addrs {
+			if bytes.Equal(snpa, link.circuit.getOurSNPA()) {
+				a.State = AdjStateUp
+				break
 			}
-			debug(DbgFPkt, "Error reading from link %s: %s\n", common.intf.Name, err)
+		}
+		if a.State == AdjStateUp {
+			break
+		}
+	}
+	return nil
+}
+
+// ------------
+// DIS election
+// ------------
+
+//
+// disFindBest - ISO10589: 8.4.5
+//
+// Locking: called with adjdb locked
+//
+func (link *LinkLAN) disFindBest() (bool, *Adj) {
+	electPri := link.priority
+	electID := GlbSystemID
+	var elect *Adj
+	count := 0
+	for _, a := range link.adjdb.srcidMap {
+		if a.State != AdjStateUp {
+			debug(DbgFDIS, "%s skipping non-up adj %s", link, a)
 			continue
 		}
-		// debug(DbgFPkt, "Read packet on %s len(%d)\n", common.link, len(frame.pkt))
-		// XXX Do some early validation before sending on channel.
-		common.inpkt <- &frame
-	}
-}
-
-// writePackets is a go routine to read packets from a channel and output to link.
-func (common *LinkCommon) writePackets() {
-	debug(DbgFPkt, "Starting to write packets on %s\n", common)
-	for {
-		debug(DbgFPkt, "XXX select in writePackets")
-		select {
-		case pkt := <-common.outpkt:
-			addr := ether.Frame(pkt).GetDst()
-			debug(DbgFPkt, "[socket] <- len %d from link channel %s to %s\n",
-				len(pkt),
-				common.intf.Name,
-				addr)
-			n, err := common.sock.WritePacket(pkt, addr)
-			if err != nil {
-				debug(DbgFPkt, "Error writing packet to %s: %s\n",
-					common.intf.Name, err)
-			} else {
-				debug(DbgFPkt, "Wrote packet len %d/%d to %s\n",
-					len(pkt), n, common.intf.Name)
+		count++
+		if a.priority > electPri {
+			debug(DbgFDIS, "%s adj %s better priority %d", link, a, a.priority)
+			elect = a
+			electPri = a.priority
+			electID = a.sysid[:]
+		} else if a.priority == electPri {
+			debug(DbgFDIS, "%s adj %s same priority %d", link, a, a.priority)
+			if bytes.Compare(a.sysid[:], electID) > 0 {
+				elect = a
+				electPri = a.priority
+				electID = a.sysid[:]
 			}
-		case <-common.quit:
-			debug(DbgFPkt, "Got quit signal for %s, will stop writing to link\n", common)
-			return
-		}
-	}
-}
-
-// -------------------------------------------------------------
-// NewLink allocates and initializes a new LinkCommon structure.
-// -------------------------------------------------------------
-func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) (*LinkCommon, error) {
-	var err error
-
-	common := &LinkCommon{
-		link: link,
-		sxxFlags: [2][2]FlagSet{
-			{NewFlagSet(), NewFlagSet()},
-			{NewFlagSet(), NewFlagSet()},
-		},
-		inpkt:  inpkt,
-		outpkt: make(chan []byte),
-		quit:   quit,
-	}
-
-	if common.intf, err = net.InterfaceByName(ifname); err != nil {
-		fmt.Fprintf(os.Stderr, "Error InterfaceByName: %s\n", err)
-		return nil, err
-	}
-
-	var addrs []net.Addr
-	if addrs, err = common.intf.Addrs(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error intf.Addrs: %s\n", err)
-		return nil, err
-	}
-	for _, addr := range addrs {
-		ipnet := addr.(*net.IPNet)
-		ipv4 := ipnet.IP.To4()
-		if ipv4 != nil {
-			ipnet.IP = ipv4
-			common.v4addrs = append(common.v4addrs, *ipnet)
 		} else {
-			common.v6addrs = append(common.v6addrs, *ipnet)
+			debug(DbgFDIS, "%s adj %s worse priority %d", link, a, a.priority)
 		}
 	}
-
-	// Get raw socket connection for interface send/receive
-	if common.sock, err = raw.NewInterfaceSocket(common.intf.Name); err != nil {
-		fmt.Fprintf(os.Stderr, "Error NewInterfaceSocket: %s\n", err)
-		return nil, err
+	if count == 0 {
+		debug(DbgFDIS, "%s no adj, no dis", link)
+		// No adjacencies, no DIS
+		return false, nil
 	}
-
-	// IS-IS BPF filter
-	filter, err := bpf.Assemble([]bpf.Instruction{
-		// 0: Load 2 bytes from offset 12 (ethertype)
-		bpf.LoadAbsolute{Off: 12, Size: 2},
-		// 1: Jump fwd + 1 if 0x8870 (jumbo) otherwise fwd + 0 (continue)
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x8870, SkipTrue: 1},
-		// 2: Jump fwd + 3 if > 1500 (drop non-IEEE 802.2 LLC) otherwise fwd + 0 (continue)
-		bpf.JumpIf{Cond: bpf.JumpGreaterThan, Val: 1500, SkipTrue: 3},
-		// 3: Load 2 bytes from offset 14 (llc src, dst)
-		bpf.LoadAbsolute{Off: 14, Size: 2},
-		// 4: Jump fwd + 0 if 0xfefe (keep) otherwise fwd + 1 (drop)
-		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: 0xfefe, SkipTrue: 1},
-		// 5: Keep
-		bpf.RetConstant{Val: 0xffff},
-		// 6: Drop
-		bpf.RetConstant{Val: 0},
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error bpf.Assemble: %s\n", err)
-		return nil, err
-	}
-
-	err = common.sock.SetBPF(filter)
-	if err != nil {
-		fmt.Printf("Error setting filter: %s\n", err)
-		return nil, err
-	}
-
-	go common.readPackets()
-	go common.writePackets()
-
-	return common, nil
+	return elect == nil, elect
 }
 
-func (l *LinkCommon) SetFlag(seg *LSPSegment, flag SxxFlag) {
-	l.sxxFlags[seg.lindex][flag].Add(seg.lspid)
+func (link *LinkLAN) disElect() {
+	debug(DbgFDIS, "Running DIS election on %s", link)
+
+	link.adjdb.lock.Lock()
+	defer link.adjdb.lock.Unlock()
+
+	var newLANID clns.NodeID
+	oldLANID := link.lanID
+
+	electUs, electOther := link.disFindBest()
+	if electUs {
+		debug(DbgFDIS, "%s electUS", link)
+		newLANID = link.ourlanID
+	} else if electOther != nil {
+		debug(DbgFDIS, "%s electOther %s", link, electOther)
+		newLANID = electOther.lanID
+	}
+
+	if oldLANID == newLANID {
+		debug(DbgFDIS, "Same DIS elected: %s", newLANID)
+		return
+	}
+
+	debug(DbgFDIS, "DIS change: old %s new %s", oldLANID, newLANID)
+
+	if !electUs {
+		if link.disElected {
+			link.disElected = false
+			// XXX perform DIS resign duties
+		}
+		if electOther == nil {
+			// XXX No DIS
+			link.lanID = link.ourlanID
+		} else {
+			link.lanID = newLANID
+		}
+	} else if !link.disElected {
+		link.disElected = true
+		// XXX start new DIS duties
+	}
+	// XXX Update Process: signal DIS change
 }
 
-func (l *LinkCommon) ClearFlag(seg *LSPSegment, flag SxxFlag) {
-	l.sxxFlags[seg.lindex][flag].Remove(seg.lspid)
+// --------
+// Flooding
+// --------
+
+// ClearFlag clears a flag for lspid on link.
+func (link *LinkLAN) ClearFlag(flag FlagIndex, lspid *clns.LSPID) {
+	link.flagCond.L.Lock()
+	link.ClearFlagLocked(flag, lspid)
+	link.flagCond.L.Unlock()
 }
 
-func (l *LinkCommon) GetFlags(lindex uint8, flag SxxFlag) FlagSet {
-	return l.sxxFlags[lindex][flag]
+// ClearFlagLocked clears a flag for lspid on link without locking
+func (link *LinkLAN) ClearFlagLocked(flag FlagIndex, lspid *clns.LSPID) {
+	delete(link.flags[flag], *lspid)
+	if (GlbDebug & DbgFFlags) != 0 {
+		debug(DbgFFlags, "Clear %s on %s for %s", flag, link, lspid)
+	}
+}
+
+// SetFlag sets a flag for lspid on link and schedules a send
+func (link *LinkLAN) SetFlag(flag FlagIndex, lspid *clns.LSPID) {
+	link.flagCond.L.Lock()
+	defer link.flagCond.L.Unlock()
+	link.flags[flag][*lspid] = true
+	if (GlbDebug & DbgFFlags) != 0 {
+		debug(DbgFFlags, "Set %s on %s for %s", flag, link, lspid)
+	}
+	link.flagCond.Signal()
+}
+
+// _processFlags is the guts of the sendLSP function
+func (link *LinkLAN) _processFlags() {
+	link.flagCond.L.Lock()
+	llen := len(link.flags[SRM])
+	plen := len(link.flags[SSN])
+	for llen+plen == 0 {
+		debug(DbgFFlags, "Waiting for LSP flags on %s", link)
+		link.flagCond.Wait()
+	}
+
+	// ---------------------------------
+	// Locked - Process 1 LSP and 1 PSNP
+	// ---------------------------------
+
+	//
+	// Get an LSP PDU
+	//
+	var lspf ether.Frame
+	// Only process one LSP per lock
+	for lspid := range link.flags[SRM] {
+		var l int
+		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.lindex])
+		if l = link.lspdb.CopyLSPPayload(&lspid, payload); l == 0 {
+			break
+		}
+		// Clear the flag when the send is eminent, doesn't have to
+		// happen now though.
+		link.ClearFlagLocked(SRM, &lspid)
+		CloseFrame(etherp, l)
+		lspf = etherp
+		break
+	}
+
+	//
+	// Get a PSNP PDU
+	//
+	var psnpf ether.Frame
+	if plen != 0 {
+		psnpf = link.getPSNPLocked()
+	}
+
+	link.flagCond.L.Unlock()
+
+	//
+	// Unlocked
+	//
+
+	// Send LSP
+	if lspf != nil {
+		link.circuit.outpkt <- lspf
+	}
+
+	// Send PSNP
+	if psnpf != nil {
+		link.circuit.outpkt <- psnpf
+	}
+}
+
+// XXX this go rtn has no quit
+func (link *LinkLAN) processFlags() {
+	for {
+		link._processFlags()
+	}
+}
+
+// fillSNPLocked is called to fill a SNP packet with SNPEntries the flagCond
+// Lock has is held.
+func (link *LinkLAN) fillSNPLocked(tlvp tlv.Data) tlv.Data {
+	track, _ := tlv.Open(tlvp, tlv.TypeSNPEntries, nil)
+	for lspid := range link.flags[SSN] {
+		var err error
+		var p tlv.Data
+		if p, err = track.Alloc(tlv.SNPEntSize); err != nil {
+			// Assert that this is the error we expect.
+			_ = err.(tlv.ErrNoSpace)
+			break
+		}
+		// XXX maybe it's a bug if this fails?
+		if ok := link.lspdb.CopyLSPSNP(&lspid, p); ok {
+			link.ClearFlagLocked(SSN, &lspid)
+		} else {
+			logger.Panicf("Got LSP SSN with no LSP for %s", lspid)
+		}
+	}
+	return track.Close()
+}
+
+// getPSNPLocked is called to get one PSNP PDU worth of SNP based on SSN flags,
+// the flagCond Lock is held.
+func (link *LinkLAN) getPSNPLocked() ether.Frame {
+	var pdutype clns.PDUType
+	if link.lindex == 0 {
+		pdutype = clns.PDUTypePSNPL1
+	} else {
+		pdutype = clns.PDUTypePSNPL2
+	}
+	etherp, _, psnp, tlvp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
+
+	// Fill fixed header values
+	copy(psnp[clns.HdrPSNPSrcID:], GlbSystemID)
+
+	// Fill as many SNP entries as we can in one PDU
+	endp := link.fillSNPLocked(tlvp)
+
+	link.circuit.ClosePDU(etherp, endp)
+
+	return etherp
 }

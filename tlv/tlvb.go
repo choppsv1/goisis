@@ -7,6 +7,7 @@ package tlv
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/choppsv1/goisis/clns"
 	"net"
 	"reflect"
 	"unsafe"
@@ -25,16 +26,6 @@ type NLPID uint8
 
 // SystemID is a byte address of fixed (6) length
 type SystemID []byte
-
-// ErrNoSpace is returns from TLV adding routines when there is not enough space
-// to continue.
-type ErrNoSpace struct {
-	required, capacity int
-}
-
-func (e ErrNoSpace) Error() string {
-	return fmt.Sprintf("Not enough space (offer: %d) for TLV (ask: %d)", e.capacity, e.required)
-}
 
 func (s SystemID) String() string {
 	rv := fmt.Sprintf("%02x%02x.%02x%02x.%02x%02x",
@@ -56,7 +47,7 @@ const (
 	TypeInstanceID   = 7
 
 	TypePadding    = 8
-	TypeSnpEntries = 9
+	TypeSNPEntries = 9
 	TypeAuth       = 10
 	TypeLspBufSize = 14
 
@@ -83,7 +74,7 @@ var TypeNameMap = map[Type]string{
 	TypeISNeighbors:   "TypeISNeighbors",
 	TypeInstanceID:    "TypeInstanceID",
 	TypePadding:       "TypePadding",
-	TypeSnpEntries:    "TypeSnpEntries",
+	TypeSNPEntries:    "TypeSNPEntries",
 	TypeAuth:          "TypeAuth",
 	TypeLspBufSize:    "TypeLspBufSize",
 	TypeExtIsReach:    "TypeExtIsReach",
@@ -461,3 +452,12 @@ func AddIntfAddrs(p Data, addrs []net.IPNet) (Data, error) {
 	}
 	return tlv.Close(), nil
 }
+
+// TypeSNPEntries TLV value offsets
+const (
+	SNPLifetime = iota
+	SNPEntLSPID = SNPLifetime + 2
+	SNPEntSeqNo = SNPEntLSPID + clns.LSPIDLen
+	SNPEntCksum = SNPEntSeqNo + 4
+	SNPEntSize  = SNPEntCksum + 2
+)

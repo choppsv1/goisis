@@ -4,14 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
-	"github.com/choppsv1/goisis/ether"
+	"github.com/choppsv1/goisis/goisis/update"
 	"net"
 	"os"
 	"strings"
 )
 
-// GlbSystemID is the system ID of this IS-IS instance
-var GlbLevelEnabled clns.LevelEnableType
+// GlbISType specifies which levels IS-IS is enabled on
+var GlbISType clns.LevelFlag
 
 // GlbSystemID is the system ID of this IS-IS instance
 var GlbSystemID net.HardwareAddr
@@ -26,10 +26,14 @@ var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 // GlbDebug are the enable debug.
 var GlbDebug = DbgFPkt | DbgFAdj
 
-// GlbLinkDB is the link database
-var GlbLinkDB *LinkDB
+// GlbCDB is the global circuit DB for this instance
+var GlbCDB = NewCircuitDB()
 
-//var GlbDebug DbgFlag
+// GlbUpdateDB are the LSP Update DB for each level.
+var GlbUpdateDB [2]*update.DB
+
+// GlbQuit is a channel to signal go routines should end
+var GlbQuit = make(chan bool)
 
 // Slicer grabs a slice from a byte slice given a start and length.
 func Slicer(b []byte, start int, length int) []byte {
@@ -39,11 +43,12 @@ func Slicer(b []byte, start int, length int) []byte {
 func main() {
 	var err error
 
+	// XXX need to check for debug flags
 	// areaIDPtr := flag.String("areaid", "00", "area id of this instance")
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
-	sysIDPtr := flag.String("sysid", "00:00:00:00:00:01", "system id of this instance")
 	isTypePtr := flag.String("istype", "level-1", "level-1, level-1-2, level-2-only")
+	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
 	flag.Parse()
 
 	if *playPtr {
@@ -51,11 +56,20 @@ func main() {
 		return
 	}
 
-	GlbLinkDB = NewLinkDB()
-	linkdb := GlbLinkDB
+	//
+	// Initialize Debug
+	//
+	GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS
 
-	quit := make(chan bool)
-	GlbSystemID, err = net.ParseMAC(*sysIDPtr)
+	//
+	// Initialize System and AreaIDs
+	//
+
+	GlbSystemID, err = clns.ISOEncode(*sysIDPtr)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("System ID: %s\n", GlbSystemID)
 
 	// XXX eventually support custom areas
 	GlbAreaID = make([]byte, 1)
@@ -63,55 +77,50 @@ func main() {
 
 	switch *isTypePtr {
 	case "level-1":
-		GlbLevelEnabled = clns.LETLevel1
+		GlbISType = clns.L1Flag
 		break
 	case "level-2-only":
-		GlbLevelEnabled = clns.LETLevel2
+		GlbISType = clns.L2Flag
 		break
 	case "level-1-2":
-		GlbLevelEnabled = clns.LETLevel12
+		GlbISType = clns.L1Flag | clns.L2Flag
 		break
 	default:
 		panic(fmt.Sprintf("Invalid istype %s", *isTypePtr))
 	}
-	fmt.Printf("IS-IS %s router\n", GlbLevelEnabled)
+	fmt.Printf("IS-IS %s router\n", GlbISType)
 
-	// Get interfaces to run on.
+	//
+	// Initialize Update DB
+	//
+	dbdebug := func(format string, a ...interface{}) {
+		debug(DbgFUpd, format, a)
+	}
+	if !debugIsSet(DbgFUpd) {
+		dbdebug = nil
+	}
+	for i := clns.LIndex(0); i < 2; i++ {
+		GlbUpdateDB[i] = update.NewDB(i, GlbCDB.SetAllSRM, dbdebug)
+	}
+
+	quit := make(chan bool)
+
+	//
+	// Initialize Interfaces
+	//
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
-		var lanlink *LANLink
-		lanlink, err = NewLANLink(ifname, linkdb.inpkts, quit, 1)
+		var lanlink *CircuitLAN
+		lanlink, err = GlbCDB.NewCircuit(ifname, 1)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating link: %s\n", err)
 			os.Exit(1)
 		}
-		linkdb.links[ifname] = lanlink
+		GlbCDB.links[ifname] = lanlink
 	}
 
-	processPackets(linkdb)
+	processPDUs(GlbCDB)
+
 	close(quit)
-}
-
-// -----------------------------------------------------------------------------
-// processPackets handles all incoming packets (frames) serially. If performance
-// is an issue we could parallelize this based on packet type etc..
-// -----------------------------------------------------------------------------
-func processPackets(linkdb *LinkDB) {
-	for {
-		select {
-		case frame := <-linkdb.inpkts:
-			debug(DbgFPkt, " <- len %d from link %s to %s from %s llclen %d\n",
-				len(frame.pkt),
-				frame.link.(*LANLink).intf.Name,
-				ether.Frame(frame.pkt).GetDst(),
-				ether.Frame(frame.pkt).GetSrc(),
-				ether.Frame(frame.pkt).GetTypeLen())
-
-			err := frame.link.ProcessPacket(frame)
-			if err != nil {
-				debug(DbgFPkt, "Error processing packet: %s\n", err)
-			}
-		}
-	}
 }

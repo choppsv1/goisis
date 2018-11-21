@@ -3,9 +3,11 @@ package clns
 import (
 	"encoding/hex"
 	"fmt"
+	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/pkt"
 	"net"
 	"strings"
+	"time"
 )
 
 // ===============================
@@ -16,11 +18,7 @@ import (
 // ISO 10589 CLNS header offset values.
 // ------------------------------------
 const (
-	HdrLLCSSAP = iota // 802.2 LLC header offset values
-	HdrLLCDSAP        // 802.2 LLC header offset values
-	HdrLLCCTRL        // 802.2 LLC header offset values
-
-	HdrCLNSIDRP
+	HdrCLNSIDRP = iota
 	HdrCLNSLen
 	HdrCLNSVer
 	HdrCLNSSysIDLen
@@ -30,9 +28,6 @@ const (
 	HdrCLNSMaxArea
 	HdrCLNSSize
 )
-
-// HdrLLCSize is the size of the LLC header we use.
-const HdrLLCSize = 3
 
 // ---------------------------
 // IIH - Common header offsets
@@ -83,10 +78,13 @@ const (
 )
 
 //
-// LSP Flags
+// LSPFlags are defined in ISO10589:2002 XXX
 //
+type LSPFlags uint8
+
+// The LSP Flags
 const (
-	_ = 1 << iota
+	_ LSPFlags = 1 << iota
 	_
 	LSPFOverload
 	LSPFMetDef
@@ -121,6 +119,7 @@ const (
 // ======================================================
 
 const (
+	LLCSAP         = 0xfefe
 	LLCSSAP        = 0xfe
 	LLCDSAP        = 0xfe
 	LLCControl     = 3
@@ -136,10 +135,13 @@ const (
 	LSPPNodeIDOff  = 6
 	LSPSegmentOff  = 7
 	MaxAge         = 1200
+	MaxAgeDur      = time.Duration(1200) * time.Second
+	ZeroMaxAge     = 60
+	ZeroMaxAgeDur  = time.Duration(60) * time.Second
 	LSPRecvBufSize = 1492
 	DefHelloInt    = 10
 	DefHelloMult   = 3
-	DefHelloPri    = 1 // 64
+	DefHelloPri    = 64
 	LSPOrigBufSize = LSPRecvBufSize
 )
 
@@ -153,54 +155,66 @@ const (
 // Protocol Types and Support Functions
 // ====================================
 
-type LevelType uint8
+// Level is an IS-IS level
+type Level uint8
 
 const (
-	Level1 LevelType = 1
-	Level2           = 2
+	Level1 Level = 1
+	Level2       = 2
 )
 
-func (level LevelType) String() string {
-	return fmt.Sprintf("level-%d", level)
+func (level Level) String() string {
+	return fmt.Sprintf("L%d", int(level))
 }
 
-func (level LevelType) ToIndex() uint8 {
+func (level Level) ToIndex() LIndex {
 	if level < 1 || level > 2 {
 		panic(fmt.Sprintf("Invalid level %d", level))
 	}
-	return uint8(level) - 1
+	return LIndex(level - 1)
 }
 
-func (level LevelType) ToEnabled() LevelEnableType {
-	return LevelToEnabled(level)
+func (level Level) ToFlag() LevelFlag {
+	return LevelToFlag(level)
 }
 
-type LevelEnableType uint8
+type LevelFlag uint8
 
 const (
-	LETLevel1 LevelEnableType = iota
-	LETLevel2
-	LETLevel12
+	L1Flag LevelFlag = 1 << iota
+	L2Flag
 )
 
-func (enabled LevelEnableType) String() string {
-	switch enabled {
-	case LETLevel1:
-		return "level-1"
-	case LETLevel2:
-		return "level-2-only"
-	case LETLevel12:
-		return "level-1-2"
+func LevelToFlag(level Level) LevelFlag {
+	return LevelFlag(1 << (level - 1))
+}
+
+func (levelf LevelFlag) IsLevelEnabled(level Level) bool {
+	return (LevelToFlag(level) & levelf) != 0
+}
+
+func (lf LevelFlag) String() string {
+	switch lf {
+	case 0x1:
+		return "L1"
+	case 0x2:
+		return "L2"
+	case 0x3:
+		return "L12"
 	}
-	return fmt.Sprintf("Invalid level enabled %d", enabled)
+	return fmt.Sprintf("BadLevelFlag:0x%x", int(lf))
 }
 
-func LevelToEnabled(level LevelType) LevelEnableType {
-	return LevelEnableType(1 << (level - 1))
+// LIndex is an IS-IS level - 1
+type LIndex int
+
+func (lindex LIndex) String() string {
+	return fmt.Sprintf("L%d", int(lindex+1))
 }
 
-func (enabled LevelEnableType) IsLevelEnabled(level LevelType) bool {
-	return (LevelToEnabled(level) & enabled) != 0
+// ToLevel returns the lindex as a Level.
+func (lindex LIndex) ToLevel() Level {
+	return Level(lindex + 1)
 }
 
 // PDUType represents a PDU type
@@ -242,6 +256,13 @@ func (typ PDUType) String() string {
 	}
 }
 
+// ErrNonISISSAP indicates the frame isn't an IS-IS frame
+type ErrNonISISSAP uint16
+
+func (e ErrNonISISSAP) Error() string {
+	return fmt.Sprintf("Wrong ISIS LLC SAP %#04v", uint16(e))
+}
+
 // ErrUnkPDUType is returned when an unknown PDU type is encountered
 type ErrUnkPDUType uint8
 
@@ -253,15 +274,15 @@ func (e ErrUnkPDUType) Error() string {
 // HdrLenMap map PDU type to header lengths
 //
 var HdrLenMap = map[PDUType]uint8{
-	PDUTypeIIHLANL1: HdrCLNSSize + HdrIIHLANSize - HdrLLCSize,
-	PDUTypeIIHLANL2: HdrCLNSSize + HdrIIHLANSize - HdrLLCSize,
-	PDUTypeIIHP2P:   HdrCLNSSize + HdrIIHP2PSize - HdrLLCSize,
-	PDUTypeLSPL1:    HdrCLNSSize + HdrLSPSize - HdrLLCSize,
-	PDUTypeLSPL2:    HdrCLNSSize + HdrLSPSize - HdrLLCSize,
-	PDUTypeCSNPL1:   HdrCLNSSize + HdrCSNPSize - HdrLLCSize,
-	PDUTypeCSNPL2:   HdrCLNSSize + HdrCSNPSize - HdrLLCSize,
-	PDUTypePSNPL1:   HdrCLNSSize + HdrPSNPSize - HdrLLCSize,
-	PDUTypePSNPL2:   HdrCLNSSize + HdrPSNPSize - HdrLLCSize,
+	PDUTypeIIHLANL1: HdrCLNSSize + HdrIIHLANSize,
+	PDUTypeIIHLANL2: HdrCLNSSize + HdrIIHLANSize,
+	PDUTypeIIHP2P:   HdrCLNSSize + HdrIIHP2PSize,
+	PDUTypeLSPL1:    HdrCLNSSize + HdrLSPSize,
+	PDUTypeLSPL2:    HdrCLNSSize + HdrLSPSize,
+	PDUTypeCSNPL1:   HdrCLNSSize + HdrCSNPSize,
+	PDUTypeCSNPL2:   HdrCLNSSize + HdrCSNPSize,
+	PDUTypePSNPL1:   HdrCLNSSize + HdrPSNPSize,
+	PDUTypePSNPL2:   HdrCLNSSize + HdrPSNPSize,
 }
 
 //
@@ -298,15 +319,15 @@ var PDUTLVOffMap = map[PDUType]int{
 //
 // PDULevelMap maps PDU types to levels (if possible).
 //
-var PDULevelMap = map[PDUType]LevelType{
-	PDUTypeIIHLANL1: 1,
-	PDUTypeIIHLANL2: 2,
-	PDUTypeLSPL1:    1,
-	PDUTypeLSPL2:    2,
-	PDUTypeCSNPL1:   1,
-	PDUTypeCSNPL2:   2,
-	PDUTypePSNPL1:   1,
-	PDUTypePSNPL2:   2,
+var PDULevelMap = map[PDUType]Level{
+	PDUTypeIIHLANL1: Level(1),
+	PDUTypeIIHLANL2: Level(2),
+	PDUTypeLSPL1:    Level(1),
+	PDUTypeLSPL2:    Level(2),
+	PDUTypeCSNPL1:   Level(1),
+	PDUTypeCSNPL2:   Level(2),
+	PDUTypePSNPL1:   Level(1),
+	PDUTypePSNPL2:   Level(2),
 }
 
 // AllL1IS is the Multicast MAC to reach all level-1 IS
@@ -324,33 +345,37 @@ var AllLxIS = []net.HardwareAddr{AllL1IS, AllL2IS}
 // SNPA is a MAC address in ISO talk.
 type SNPA [SNPALen]byte
 
+func (s SNPA) String() string {
+	return net.HardwareAddr(s[:]).String()
+}
+
 // SystemID is a 6 octet system identifier all IS have uniq system IDs
 type SystemID [SysIDLen]byte
+
+func (s SystemID) String() string {
+	return ISOString(s[:], false)
+}
 
 // NodeID identifies a node in the network graph. It is comprised of a system ID
 // and a pseudo-node byte for identifying LAN Pnodes (or 0 for real nodes).
 type NodeID [NodeIDLen]byte
+
+func (n NodeID) String() string {
+	return ISOString(n[:], true)
+}
 
 // LSPID identifies an LSP segment for a node in the network graph, it is
 // comprised of a NodeID and a final segment octet to allow for multiple
 // segments to describe an full LSP.
 type LSPID [LSPIDLen]byte
 
-func (id SystemID) String() string {
-	return ISOString(id[:SysIDLen], false)
-}
-
-func (id NodeID) String() string {
-	return ISOString(id[:NodeIDLen], true)
-}
-
-func (id LSPID) String() string {
-	return ISOString(id[:LSPIDLen], true)
+func (l LSPID) String() string {
+	return ISOString(l[:LSPIDLen], true)
 }
 
 // LSPIDString prints a LSPID given a generic byte slice.
-func LSPIDString(id []byte) string {
-	return ISOString(id[:LSPIDLen], true)
+func LSPIDString(lspid []byte) string {
+	return ISOString(lspid[:LSPIDLen], true)
 }
 
 //
@@ -378,10 +403,10 @@ func ISOString(iso []byte, extratail bool) string {
 }
 
 //
-// ISODecode returns a byte slice of the hexidecimal string value given in "ISO"
+// ISOEncode returns a byte slice of the hexidecimal string value given in "ISO"
 // form
 //
-func ISODecode(isos string) (iso []byte, err error) {
+func ISOEncode(isos string) (iso []byte, err error) {
 	isos = strings.Replace(isos, ".", "", -1)
 	iso, err = hex.DecodeString(isos)
 	return
@@ -407,6 +432,26 @@ func GetPDUType(payload []byte) (PDUType, error) {
 }
 
 //
+// GetPDULevel returns the level of the PDU type or an error if not level based.
+//
+func (pdutype PDUType) GetPDULevel() (Level, error) {
+
+	level, ok := PDULevelMap[pdutype]
+	if !ok {
+		return 0, fmt.Errorf("%s is not a level based PDU type", pdutype)
+	}
+	return level, nil
+}
+
+//
+// GetPDULIndex returns the level index of the PDU type assumes the type is valid
+//
+func (pdutype PDUType) GetPDULIndex() LIndex {
+
+	return LIndex(PDULevelMap[pdutype] - 1)
+}
+
+//
 // ErrInvalidPacket is returned when we fail to validate the packet, this will
 // be broken down into more specific cases.
 //
@@ -416,37 +461,43 @@ func (e ErrInvalidPacket) Error() string {
 	return fmt.Sprintf("ErrInvalidPacket: %s", string(e))
 }
 
-// ValidatePacket validates (to an extent) a CLNS payload, and returns a correct
+// ValidatePDU validates (to an extent) a CLNS payload, and returns a correct
 // version of it. (ISO10589 8.4.2.1 and 7.3.15.{1,2}: 2, 3, 4, 5)
 // Checked Valid Items:  PDU Type, Header Length, PDU Length, Advertised
 // versions(*), Advertised sizes -- (*) XXX finish
-func ValidatePacket(payload []byte, istype, ctype LevelEnableType) ([]byte, error) {
+func ValidatePDU(llc, payload []byte, istype, ctype LevelFlag) ([]byte, PDUType, error) {
+	// Should not be dependent on circuit type -- move to CLNS
+	sap := pkt.GetUInt16(llc[0:2])
+	if sap != LLCSAP {
+		return nil, 0, ErrNonISISSAP(sap)
+	}
+
 	pdutype, err := GetPDUType(payload)
 	if err != nil {
-		return nil, err
+		return nil, pdutype, err
 	}
 
 	if HdrLenMap[pdutype] != payload[HdrCLNSLen] {
-		return nil, ErrInvalidPacket(
+		return nil, pdutype, ErrInvalidPacket(
 			fmt.Sprintf("header length mismatch, expected %d got %d", HdrLenMap[pdutype], payload[HdrCLNSLen]))
 	}
 
 	off := PDULenOffMap[pdutype]
 	pdulen := pkt.GetUInt16(payload[off:])
-	if int(pdulen)+HdrLLCSize > len(payload) {
-		return nil, ErrInvalidPacket(
+	if int(pdulen) > len(payload) {
+		return nil, pdutype, ErrInvalidPacket(
 			fmt.Sprintf("pdulen %d greater than payload %d", pdulen, len(payload)))
 	}
-	if pdulen+14 < 46 {
-		return nil, ErrInvalidPacket("pdulen < 46")
+	if pdulen+ether.HdrLLCSize+ether.HdrEthSize < 46 {
+		return nil, pdutype, ErrInvalidPacket("ether < 46")
 	}
-	if int(pdulen+HdrLLCSize) < len(payload) {
+	if int(pdulen) < len(payload) {
 		// Don't log padded short frames
 		if pdulen > 35 {
 			fmt.Printf("payload %d larger than pdulen %d(+3) trimming\n",
 				len(payload), pdulen)
 		}
-		payload = payload[:pdulen+HdrLLCSize]
+		payload = payload[:pdulen]
 	}
 
 	level, ok := PDULevelMap[pdutype]
@@ -454,26 +505,26 @@ func ValidatePacket(payload []byte, istype, ctype LevelEnableType) ([]byte, erro
 		// P2PHello won't have a level, don't fail
 		// ISO10589: 7.3.15.1: 2
 		if !istype.IsLevelEnabled(level) {
-			return nil, nil
+			return nil, pdutype, nil
 		}
 		// ISO10589: 7.3.15.1: 3
 		if !ctype.IsLevelEnabled(level) {
-			return nil, nil
+			return nil, pdutype, nil
 		}
 	}
 
 	// ISO10589: 7.3.15.1: 4
 	sysidlen := payload[HdrCLNSSysIDLen]
 	if sysidlen != 0 && sysidlen != 6 {
-		return nil, ErrInvalidPacket(
+		return nil, pdutype, ErrInvalidPacket(
 			fmt.Sprintf("TRAP iDFieldLengthMismtach: %d", sysidlen))
 	}
 	// ISO10589 7.3.15.1: 5)
 	maxarea := payload[HdrCLNSMaxArea]
 	if maxarea != 0 && maxarea != 3 {
-		return nil, ErrInvalidPacket(
+		return nil, pdutype, ErrInvalidPacket(
 			fmt.Sprintf("TRAP maximumAreaAddressesMismatch %d", maxarea))
 	}
 
-	return payload, nil
+	return payload, pdutype, nil
 }
