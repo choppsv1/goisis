@@ -62,8 +62,8 @@ type Circuit interface {
 type PDU struct {
 	payload []byte
 	pdutype clns.PDUType
-	level   clns.Level
-	lindex  clns.LIndex
+	l       clns.Level
+	li      clns.LIndex
 	tlvs    map[tlv.Type][]tlv.Data
 }
 
@@ -83,7 +83,7 @@ type RecvPDU struct {
 type CircuitBase struct {
 	intf    *net.Interface
 	sock    raw.IntfSocket
-	levelf  clns.LevelFlag
+	lf      clns.LevelFlag
 	v4addrs []net.IPNet
 	v6addrs []net.IPNet
 	iihpkt  chan<- *RecvPDU
@@ -99,11 +99,11 @@ func (cb *CircuitBase) String() string {
 //
 // NewCircuitBase allocates and initializes a new CircuitBase structure.
 //
-func NewCircuitBase(ifname string, levelf clns.LevelFlag, iihpkt, snppkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
+func NewCircuitBase(ifname string, lf clns.LevelFlag, iihpkt, snppkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
 	var err error
 
 	cb := &CircuitBase{
-		levelf: levelf,
+		lf:     lf,
 		iihpkt: iihpkt,
 		snppkt: snppkt,
 		outpkt: make(chan []byte),
@@ -173,7 +173,7 @@ func (c *CircuitLAN) getOurSNPA() net.HardwareAddr {
 //
 // NewCircuitLAN creates a LAN circuit for a given IS-IS level.
 //
-func NewCircuitLAN(cb *CircuitBase, levelf clns.LevelFlag) (*CircuitLAN, error) {
+func NewCircuitLAN(cb *CircuitBase, lf clns.LevelFlag) (*CircuitLAN, error) {
 	var err error
 
 	c := &CircuitLAN{
@@ -208,7 +208,7 @@ func NewCircuitLAN(cb *CircuitBase, levelf clns.LevelFlag) (*CircuitLAN, error) 
 	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true
 
 	for i := uint(0); i < 2; i++ {
-		if (levelf & (1 << i)) != 0 {
+		if (lf & (1 << i)) != 0 {
 			c.levlink[i] = NewLinkLAN(c, clns.LIndex(i), cb.quit)
 		}
 	}

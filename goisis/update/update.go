@@ -41,7 +41,7 @@ type DB struct {
 	cgetlsp   chan inputGetLSP
 	cgetsnp   chan inputGetSNP
 	expireLSP chan clns.LSPID
-	lindex    clns.LIndex
+	li        clns.LIndex
 	db        map[clns.LSPID]*lspSegment
 	setsrm    func(*clns.LSPID)
 	debug     func(string, ...interface{})
@@ -53,7 +53,7 @@ type lspSegment struct {
 	hdr          []byte
 	tlvs         map[tlv.Type][]tlv.Data
 	lspid        clns.LSPID
-	lindex       clns.LIndex
+	li           clns.LIndex
 	lifetime     *xtime.Timeout
 	zeroLifetime *xtime.Timeout
 	holdTimer    *time.Timer
@@ -67,7 +67,7 @@ func NewDB(l clns.Level,
 	fmt.Printf("UPD: debug: %q", debug)
 	db := &DB{
 		debug:     debug,
-		lindex:    l.ToIndex(),
+		li:        l.ToIndex(),
 		db:        make(map[clns.LSPID]*lspSegment),
 		setsrm:    setsrm,
 		lspC:      make(chan inputPDU),
@@ -127,7 +127,7 @@ func (db *DB) newLSPSegment(payload []byte, pdutype clns.PDUType, tlvs map[tlv.T
 	lsp := &lspSegment{
 		payload: payload,
 		hdr:     hdr,
-		lindex:  pdutype.GetPDULIndex(),
+		li:      pdutype.GetPDULIndex(),
 		tlvs:    tlvs,
 	}
 	copy(lsp.lspid[:], hdr[clns.HdrLSPLSPID:])

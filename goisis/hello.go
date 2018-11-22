@@ -46,7 +46,7 @@ func sendLANHello(link *LinkLAN) error {
 
 	debug(DbgFPkt, "Sending IIH on %s", link)
 
-	if link.level == 1 {
+	if link.l == 1 {
 		pdutype = clns.PDUTypeIIHLANL1
 	} else {
 		pdutype = clns.PDUTypeIIHLANL2
@@ -54,13 +54,13 @@ func sendLANHello(link *LinkLAN) error {
 
 	// XXX we want the API to return payload here and later we convert frame
 	// in close so that we aren't dependent on ethernet
-	etherp, _, iihp, endp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
+	etherp, _, iihp, endp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.li])
 
 	// ----------
 	// IIH Header
 	// ----------
 
-	iihp[clns.HdrIIHLANCircType] = uint8(link.level)
+	iihp[clns.HdrIIHLANCircType] = uint8(link.l)
 	copy(iihp[clns.HdrIIHLANSrcID:], GlbSystemID)
 	pkt.PutUInt16(iihp[clns.HdrIIHLANHoldTime:],
 		uint16(link.helloInt*link.holdMult))
@@ -71,7 +71,7 @@ func sendLANHello(link *LinkLAN) error {
 	// Add TLVs
 	// --------
 
-	if link.level == 1 {
+	if link.l == 1 {
 		endp, err = tlv.AddArea(endp, GlbAreaID)
 		if err != nil {
 			debug(DbgFPkt, "Error adding area TLV: %s", err)
@@ -131,13 +131,13 @@ func (e ErrIIH) Error() string {
 }
 
 // RecvLANHello receives IIH from on a given LAN link
-func RecvLANHello(link Link, pdu *RecvPDU, level clns.Level) error {
+func RecvLANHello(link Link, pdu *RecvPDU, l clns.Level) error {
 	debug(DbgFPkt, "IIH: processign from %s", pdu.src)
 
 	tlvs := pdu.tlvs
 
 	// For level 1 we must be in the same area.
-	if level == 1 {
+	if l == 1 {
 		// Expect 1 and only 1 Area TLV
 		atlv := tlvs[tlv.TypeAreaAddrs]
 		if len(atlv) != 1 {

@@ -48,14 +48,14 @@ func (base *CircuitBase) readPackets(c Circuit) {
 		// Receive IIH inside the circuit's go routine in parallel.
 		switch pdu.pdutype {
 		case clns.PDUTypeIIHLANL1:
-			level, _ := pdu.pdutype.GetPDULevel()
-			RecvLANHello(pdu.link, pdu, level)
+			l, _ := pdu.pdutype.GetPDULevel()
+			RecvLANHello(pdu.link, pdu, l)
 		case clns.PDUTypeIIHLANL2:
-			level, _ := pdu.pdutype.GetPDULevel()
-			RecvLANHello(pdu.link, pdu, level)
+			l, _ := pdu.pdutype.GetPDULevel()
+			RecvLANHello(pdu.link, pdu, l)
 		case clns.PDUTypeLSPL1, clns.PDUTypeLSPL2:
 			debug(DbgFPkt, "Sending LSP from %s to UPD", base)
-			GlbUpdateDB[pdu.lindex].InputLSP(pdu.payload, pdu.pdutype, pdu.tlvs)
+			GlbUpdateDB[pdu.li].InputLSP(pdu.payload, pdu.pdutype, pdu.tlvs)
 		case clns.PDUTypeCSNPL1, clns.PDUTypeCSNPL2:
 			base.snppkt <- pdu
 		default:
@@ -117,27 +117,27 @@ func (c *CircuitLAN) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
 		return nil
 	}
 
-	pdu.payload, pdu.pdutype, err = clns.ValidatePDU(llc, pdu.payload, GlbISType, c.levelf)
+	pdu.payload, pdu.pdutype, err = clns.ValidatePDU(llc, pdu.payload, GlbISType, c.lf)
 	if err != nil {
 		debug(DbgFPkt, "Dropping IS-IS frame due to: %s", err)
 		return nil
 	}
 
-	level, err := pdu.pdutype.GetPDULevel()
+	l, err := pdu.pdutype.GetPDULevel()
 	if err != nil {
 		debug(DbgFPkt, "Dropping frame due to: %s", err)
 		return nil
 	}
-	pdu.level = level
+	pdu.l = l
 
-	pdu.link = c.levlink[level-1]
+	pdu.link = c.levlink[l-1]
 	if pdu.link == nil {
-		debug(DbgFPkt, "Dropping frame as L%s not enabled on %s", level, c)
+		debug(DbgFPkt, "Dropping frame as L%s not enabled on %s", l, c)
 		return nil
 	}
 
 	// Check for expected ether dst (correct mcast or us)
-	if !bytes.Equal(pdu.dst, clns.AllLxIS[level-1]) {
+	if !bytes.Equal(pdu.dst, clns.AllLxIS[l-1]) {
 		if !bytes.Equal(pdu.dst, c.getOurSNPA()) {
 
 			debug(DbgFPkt, "Dropping IS-IS frame to non-IS-IS address, exciting extensions in use!?")
@@ -184,7 +184,7 @@ func processPDUs(cdb *CircuitDB) {
 func (link *LinkLAN) ProcessSNP(pdu *RecvPDU) error {
 	// Validate ethernet values.
 	// var src, dst [clns.SNPALen]byte
-	// level, err := pdu.pdutype.GetPDULevel()
+	// l, err := pdu.pdutype.GetPDULevel()
 	// if err != nil {
 	// 	return err
 	// }

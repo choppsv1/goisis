@@ -46,8 +46,8 @@ type Adj struct {
 	lanID     clns.NodeID
 	areas     [][]byte
 	db        *AdjDB
-	level     clns.Level //  need to change this to LevelFlag for p2p
-	lindex    clns.LIndex
+	l         clns.Level //  need to change this to LevelFlag for p2p
+	li        clns.LIndex
 	priority  uint8
 	hold      uint16
 	holdTimer *time.Timer
@@ -65,7 +65,7 @@ func NewAdj(db *AdjDB, snpa [clns.SNPALen]byte, srcid [clns.SysIDLen]byte, paylo
 		State: AdjStateDown,
 		sysid: srcid,
 		db:    db,
-		level: db.level,
+		l:     db.l,
 	}
 	if payload[clns.HdrCLNSPDUType] != clns.PDUTypeIIHP2P {
 		iih := payload[clns.HdrCLNSSize:]
@@ -99,7 +99,7 @@ func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 		}
 	}
 
-	if a.level == 1 {
+	if a.l == 1 {
 		// Update Areas
 		areas, err := tlvs[tlv.TypeAreaAddrs][0].AreaAddrsValue()
 		if err != nil {

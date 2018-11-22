@@ -12,8 +12,8 @@ import (
 // AdjDB stores the adjacencies for a given level on a given link.
 //
 type AdjDB struct {
-	level    clns.Level
-	lindex   clns.LIndex
+	l        clns.Level
+	li       clns.LIndex
 	link     Link
 	lock     sync.Mutex
 	snpaMap  map[[clns.SNPALen]byte]*Adj
@@ -23,10 +23,10 @@ type AdjDB struct {
 //
 // NewAdjDB creates and initializes a new adjacency database for a given link
 // and level.
-func NewAdjDB(link Link, lindex clns.LIndex) *AdjDB {
+func NewAdjDB(link Link, li clns.LIndex) *AdjDB {
 	return &AdjDB{
-		level:    lindex.ToLevel(),
-		lindex:   lindex,
+		l:        li.ToLevel(),
+		li:       li,
 		link:     link,
 		snpaMap:  make(map[[clns.SNPALen]byte]*Adj),
 		srcidMap: make(map[[clns.SysIDLen]byte]*Adj),

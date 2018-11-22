@@ -41,7 +41,7 @@ func main() {
 	// XXX need to check for debug flags
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
-	isTypePtr := flag.String("istype", "level-1", "level-1, level-1-2, level-2-only")
+	isTypePtr := flag.String("istype", "l-1", "l-1, l-1-2, l-2-only")
 	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
 	areaIDPtr := flag.String("area", "00", "area of this instance")
 	flag.Parse()
@@ -60,13 +60,13 @@ func main() {
 	// Initialize instance type
 	//
 	switch *isTypePtr {
-	case "level-1":
+	case "l-1":
 		GlbISType = clns.L1Flag
 		break
-	case "level-2-only":
+	case "l-2-only":
 		GlbISType = clns.L2Flag
 		break
-	case "level-1-2":
+	case "l-1-2":
 		GlbISType = clns.L1Flag | clns.L2Flag
 		break
 	default:

@@ -43,7 +43,7 @@ type Link interface {
 	// newupdcode
 	// SetFlag(seg *LSPSegment, flag SxxFlag)
 	// ClearFlag(seg *LSPSegment, flag SxxFlag)
-	// GetFlags(lindex uint8, flag SxxFlag) FlagSet
+	// GetFlags(li uint8, flag SxxFlag) FlagSet
 	// HandleSRM(seg *LSPSegment)
 	// HandleSSN(seg *LSPSegment)
 }
@@ -92,8 +92,8 @@ func (flag FlagIndex) String() string {
 
 // SendLSP is the value passed on the sendLSP channel
 type SendLSP struct {
-	lindex clns.LIndex
-	lspid  clns.LSPID
+	li    clns.LIndex
+	lspid clns.LSPID
 }
 
 //
@@ -102,8 +102,8 @@ type SendLSP struct {
 //
 type LinkLAN struct {
 	circuit *CircuitLAN
-	level   clns.Level
-	lindex  clns.LIndex //  level - 1 for array indexing
+	l       clns.Level
+	li      clns.LIndex // level - 1 for array indexing
 
 	// Hello Process
 	helloInt  uint
@@ -128,17 +128,17 @@ type LinkLAN struct {
 }
 
 func (link *LinkLAN) String() string {
-	return fmt.Sprintf("LANLevelLink(%s level %d)", link.circuit.CircuitBase, link.level)
+	return fmt.Sprintf("LANLevelLink(%s l %d)", link.circuit.CircuitBase, link.l)
 }
 
 //
 // NewLinkLAN creates a LAN link for a given IS-IS level.
 //
-func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit <-chan bool) *LinkLAN {
+func NewLinkLAN(c *CircuitLAN, li clns.LIndex, quit <-chan bool) *LinkLAN {
 	link := &LinkLAN{
 		circuit:  c,
-		level:    clns.Level(lindex + 1),
-		lindex:   lindex,
+		l:        clns.Level(li + 1),
+		li:       li,
 		priority: clns.DefHelloPri,
 		helloInt: clns.DefHelloInt,
 		holdMult: clns.DefHelloMult,
@@ -147,11 +147,11 @@ func NewLinkLAN(c *CircuitLAN, lindex clns.LIndex, quit <-chan bool) *LinkLAN {
 			make(map[clns.LSPID]bool)},
 	}
 	link.flagCond = sync.NewCond(&link.flagLock)
-	link.adjdb = NewAdjDB(link, link.lindex)
-	link.lspdb = GlbUpdateDB[lindex]
+	link.adjdb = NewAdjDB(link, link.li)
+	link.lspdb = GlbUpdateDB[li]
 
-	lanLinkCircuitIDs[lindex]++
-	link.lclCircID = lanLinkCircuitIDs[lindex]
+	lanLinkCircuitIDs[li]++
+	link.lclCircID = lanLinkCircuitIDs[li]
 	copy(link.ourlanID[:], GlbSystemID)
 	link.ourlanID[clns.SysIDLen] = link.lclCircID
 	copy(link.lanID[:], link.ourlanID[:])
@@ -380,7 +380,7 @@ func (link *LinkLAN) _processFlags() {
 	// Only process one LSP per lock
 	for lspid := range link.flags[SRM] {
 		var l int
-		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.lindex])
+		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.li])
 		if l = link.lspdb.CopyLSPPayload(&lspid, payload); l == 0 {
 			break
 		}
@@ -453,12 +453,12 @@ func (link *LinkLAN) fillSNPLocked(tlvp tlv.Data) tlv.Data {
 // the flagCond Lock is held.
 func (link *LinkLAN) getPSNPLocked() ether.Frame {
 	var pdutype clns.PDUType
-	if link.lindex == 0 {
+	if link.li == 0 {
 		pdutype = clns.PDUTypePSNPL1
 	} else {
 		pdutype = clns.PDUTypePSNPL2
 	}
-	etherp, _, psnp, tlvp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
+	etherp, _, psnp, tlvp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.li])
 
 	// Fill fixed header values
 	copy(psnp[clns.HdrPSNPSrcID:], GlbSystemID)

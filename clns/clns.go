@@ -163,19 +163,19 @@ const (
 	Level2       = 2
 )
 
-func (level Level) String() string {
-	return fmt.Sprintf("L%d", int(level))
+func (l Level) String() string {
+	return fmt.Sprintf("L%d", int(l))
 }
 
-func (level Level) ToIndex() LIndex {
-	if level < 1 || level > 2 {
-		panic(fmt.Sprintf("Invalid level %d", level))
+func (l Level) ToIndex() LIndex {
+	if l < 1 || l > 2 {
+		panic(fmt.Sprintf("Invalid l %d", l))
 	}
-	return LIndex(level - 1)
+	return LIndex(l - 1)
 }
 
-func (level Level) ToFlag() LevelFlag {
-	return LevelToFlag(level)
+func (l Level) ToFlag() LevelFlag {
+	return LevelToFlag(l)
 }
 
 type LevelFlag uint8
@@ -185,12 +185,12 @@ const (
 	L2Flag
 )
 
-func LevelToFlag(level Level) LevelFlag {
-	return LevelFlag(1 << (level - 1))
+func LevelToFlag(l Level) LevelFlag {
+	return LevelFlag(1 << (l - 1))
 }
 
-func (levelf LevelFlag) IsLevelEnabled(level Level) bool {
-	return (LevelToFlag(level) & levelf) != 0
+func (lf LevelFlag) IsLevelEnabled(l Level) bool {
+	return (LevelToFlag(l) & lf) != 0
 }
 
 func (lf LevelFlag) String() string {
@@ -208,13 +208,13 @@ func (lf LevelFlag) String() string {
 // LIndex is an IS-IS level - 1
 type LIndex int
 
-func (lindex LIndex) String() string {
-	return fmt.Sprintf("L%d", int(lindex+1))
+func (li LIndex) String() string {
+	return fmt.Sprintf("L%d", int(li+1))
 }
 
 // ToLevel returns the lindex as a Level.
-func (lindex LIndex) ToLevel() Level {
-	return Level(lindex + 1)
+func (li LIndex) ToLevel() Level {
+	return Level(li + 1)
 }
 
 // PDUType represents a PDU type
@@ -436,11 +436,11 @@ func GetPDUType(payload []byte) (PDUType, error) {
 //
 func (pdutype PDUType) GetPDULevel() (Level, error) {
 
-	level, ok := PDULevelMap[pdutype]
+	l, ok := PDULevelMap[pdutype]
 	if !ok {
 		return 0, fmt.Errorf("%s is not a level based PDU type", pdutype)
 	}
-	return level, nil
+	return l, nil
 }
 
 //
@@ -500,15 +500,15 @@ func ValidatePDU(llc, payload []byte, istype, ctype LevelFlag) ([]byte, PDUType,
 		payload = payload[:pdulen]
 	}
 
-	level, ok := PDULevelMap[pdutype]
+	l, ok := PDULevelMap[pdutype]
 	if ok {
 		// P2PHello won't have a level, don't fail
 		// ISO10589: 7.3.15.1: 2
-		if !istype.IsLevelEnabled(level) {
+		if !istype.IsLevelEnabled(l) {
 			return nil, pdutype, nil
 		}
 		// ISO10589: 7.3.15.1: 3
-		if !ctype.IsLevelEnabled(level) {
+		if !ctype.IsLevelEnabled(l) {
 			return nil, pdutype, nil
 		}
 	}
