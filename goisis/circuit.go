@@ -49,10 +49,12 @@ var clnsTemplate = []uint8{
 // Circuit is an IS-IS/CLNS physical interface.
 //
 type Circuit interface {
+	ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex)
 	ClosePDU(ether.Frame, []byte)
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
+	SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex)
 }
 
 // -----
@@ -275,4 +277,14 @@ func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) {
 
 	debug(DbgFPkt, "Closing PDU with pdulen %d payload %d framelen %d",
 		pdulen, epayloadlen, len(etherp))
+}
+
+// SetFlag sets the given flag for the given LSPID for the given level (li)
+func (c *CircuitLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
+	c.levlink[li].SetFlag(flag, lspid)
+}
+
+// ClearFlag sets the given flag for the given LSPID for the given level (li)
+func (c *CircuitLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
+	c.levlink[li].ClearFlag(flag, lspid)
 }

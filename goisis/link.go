@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+var SRM = update.SRM
+var SSN = update.SSN
+
 // =======
 // Globals
 // =======
@@ -36,9 +39,9 @@ type Link interface {
 
 	// oldupdcode
 	DISInfoChanged()
-	ClearFlag(FlagIndex, *clns.LSPID)
-	ClearFlagLocked(FlagIndex, *clns.LSPID)
-	SetFlag(FlagIndex, *clns.LSPID)
+	ClearFlag(update.SxxFlag, *clns.LSPID)
+	ClearFlagLocked(update.SxxFlag, *clns.LSPID)
+	SetFlag(update.SxxFlag, *clns.LSPID)
 
 	// newupdcode
 	// SetFlag(seg *LSPSegment, flag SxxFlag)
@@ -48,47 +51,9 @@ type Link interface {
 	// HandleSSN(seg *LSPSegment)
 }
 
-// ClearSRMFlag clears an SRM flag for the given LSPID on the given Link
-func ClearSRMFlag(l Link, lspid *clns.LSPID) {
-	l.ClearFlag(SRM, lspid)
-}
-
-// ClearSSNFlag clears an SRM flag for the given LSPID on the given Link
-func ClearSSNFlag(l Link, lspid *clns.LSPID) {
-	l.ClearFlag(SSN, lspid)
-}
-
-// SetSRMFlag sets an SRM flag for the given LSPID on the given Link
-func SetSRMFlag(l Link, lspid *clns.LSPID) {
-	l.SetFlag(SRM, lspid)
-}
-
-// SetSSNFlag sets an SRM flag for the given LSPID on the given Link
-func SetSSNFlag(l Link, lspid *clns.LSPID) {
-	l.SetFlag(SSN, lspid)
-}
-
 // =====
 // Types
 // =====
-
-// FlagIndex Update process flooding flags (not true flags)
-type FlagIndex uint8
-
-// Update process flooding flags
-const (
-	SRM FlagIndex = iota
-	SSN
-)
-
-var flagStrings = [2]string{
-	"SRM",
-	"SSN",
-}
-
-func (flag FlagIndex) String() string {
-	return flagStrings[flag]
-}
 
 // SendLSP is the value passed on the sendLSP channel
 type SendLSP struct {
@@ -331,14 +296,14 @@ func (link *LinkLAN) disElect() {
 // --------
 
 // ClearFlag clears a flag for lspid on link.
-func (link *LinkLAN) ClearFlag(flag FlagIndex, lspid *clns.LSPID) {
+func (link *LinkLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID) {
 	link.flagCond.L.Lock()
 	link.ClearFlagLocked(flag, lspid)
 	link.flagCond.L.Unlock()
 }
 
 // ClearFlagLocked clears a flag for lspid on link without locking
-func (link *LinkLAN) ClearFlagLocked(flag FlagIndex, lspid *clns.LSPID) {
+func (link *LinkLAN) ClearFlagLocked(flag update.SxxFlag, lspid *clns.LSPID) {
 	delete(link.flags[flag], *lspid)
 	if (GlbDebug & DbgFFlags) != 0 {
 		debug(DbgFFlags, "Clear %s on %s for %s", flag, link, lspid)
@@ -346,7 +311,7 @@ func (link *LinkLAN) ClearFlagLocked(flag FlagIndex, lspid *clns.LSPID) {
 }
 
 // SetFlag sets a flag for lspid on link and schedules a send
-func (link *LinkLAN) SetFlag(flag FlagIndex, lspid *clns.LSPID) {
+func (link *LinkLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID) {
 	link.flagCond.L.Lock()
 	defer link.flagCond.L.Unlock()
 	link.flags[flag][*lspid] = true

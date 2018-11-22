@@ -9,25 +9,23 @@ import (
 // CircuitDB is a database of circuits we run on.
 //
 type CircuitDB struct {
-	links   map[string]interface{}
-	iihpkts chan *RecvPDU
-	snppkts chan *RecvPDU
+	circuits map[string]Circuit
+	flagsC   chan update.ChgSxxFlag
+	iihpkts  chan *RecvPDU
+	snppkts  chan *RecvPDU
 }
 
-//
 // NewCircuitDB allocate and initialize a new circuit database.
-//
 func NewCircuitDB() *CircuitDB {
 	return &CircuitDB{
-		links:   make(map[string]interface{}),
-		iihpkts: make(chan *RecvPDU),
-		snppkts: make(chan *RecvPDU),
+		circuits: make(map[string]Circuit),
+		flagsC:   make(chan update.ChgSxxFlag),
+		iihpkts:  make(chan *RecvPDU),
+		snppkts:  make(chan *RecvPDU),
 	}
 }
 
-func (cdb *CircuitDB) SetAllSRM(lspid *clns.LSPID) {
-}
-
+// NewCircuit creates a circuit enabled for the given levels.
 func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*update.DB) (*CircuitLAN, error) {
 	cb, err := NewCircuitBase(ifname,
 		lf,
@@ -39,5 +37,27 @@ func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*upda
 		return nil, err
 	}
 	// Check interface type and allocate LAN or P2P
-	return NewCircuitLAN(cb, lf)
+	cll, err := NewCircuitLAN(cb, lf)
+	cdb.circuits[ifname] = cll
+	return cll, err
+}
+
+// SetAllFlag sets the given flag for the given LSPID on all circuits except 'not'
+func (cdb *CircuitDB) SetAllFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex, not Circuit) {
+	for _, c := range cdb.circuits {
+		if c == not {
+			continue
+		}
+		c.SetFlag(flag, lspid, li)
+	}
+}
+
+// ClearAllFlag clears the given flag for the given LSPID on all circuits except 'not'
+func (cdb *CircuitDB) ClearAllFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex, not Circuit) {
+	for _, c := range cdb.circuits {
+		if c == not {
+			continue
+		}
+		c.ClearFlag(flag, lspid, li)
+	}
 }

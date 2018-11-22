@@ -104,7 +104,7 @@ func main() {
 	for l := clns.Level(1); l <= 2; l++ {
 		if GlbISType.IsLevelEnabled(l) {
 			li := l.ToIndex()
-			updb[li] = update.NewDB(l, cdb.SetAllSRM, dbdebug)
+			updb[li] = update.NewDB(l, cdb.flagsC, dbdebug)
 		}
 	}
 
@@ -114,12 +114,10 @@ func main() {
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
-		var lanlink *CircuitLAN
-		lanlink, err = cdb.NewCircuit(ifname, GlbISType, updb)
+		_, err = cdb.NewCircuit(ifname, GlbISType, updb)
 		if err != nil {
 			panic(fmt.Sprintf("Error creating link: %s\n", err))
 		}
-		cdb.links[ifname] = lanlink
 	}
 	for _, db := range updb {
 		if db != nil {

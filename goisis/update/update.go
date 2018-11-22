@@ -61,15 +61,12 @@ type lspSegment struct {
 }
 
 // NewDB returns a new Update Process LSP database
-func NewDB(l clns.Level,
-	setsrm func(*clns.LSPID),
-	debug func(string, ...interface{})) *DB {
-	fmt.Printf("UPD: debug: %q", debug)
+func NewDB(l clns.Level, flags chan<- ChgSxxFlag, debug func(string, ...interface{})) *DB {
+	fmt.Printf("UPD: debug: %p", debug)
 	db := &DB{
 		debug:     debug,
 		li:        l.ToIndex(),
 		db:        make(map[clns.LSPID]*lspSegment),
-		setsrm:    setsrm,
 		lspC:      make(chan inputPDU),
 		cgetlsp:   make(chan inputGetLSP),
 		cgetsnp:   make(chan inputGetSNP),
@@ -208,6 +205,7 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 	//-----------------------------
 
 	// a)
+	// db.setsrm <- lsp.lspid
 	db.setsrm(&lsp.lspid)
 
 	// b) Retain only LSP header. XXX we need more space for auth and purge tlv
