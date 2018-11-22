@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
+	"github.com/choppsv1/goisis/goisis/update"
 	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/raw"
 	"github.com/choppsv1/goisis/tlv"
@@ -84,6 +85,7 @@ type CircuitBase struct {
 	intf    *net.Interface
 	sock    raw.IntfSocket
 	lf      clns.LevelFlag
+	updb    [2]*update.DB
 	v4addrs []net.IPNet
 	v6addrs []net.IPNet
 	iihpkt  chan<- *RecvPDU
@@ -99,11 +101,12 @@ func (cb *CircuitBase) String() string {
 //
 // NewCircuitBase allocates and initializes a new CircuitBase structure.
 //
-func NewCircuitBase(ifname string, lf clns.LevelFlag, iihpkt, snppkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
+func NewCircuitBase(ifname string, lf clns.LevelFlag, updb [2]*update.DB, iihpkt, snppkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
 	var err error
 
 	cb := &CircuitBase{
 		lf:     lf,
+		updb:   updb,
 		iihpkt: iihpkt,
 		snppkt: snppkt,
 		outpkt: make(chan []byte),
@@ -207,9 +210,10 @@ func NewCircuitLAN(cb *CircuitBase, lf clns.LevelFlag) (*CircuitLAN, error) {
 	// Record our SNPA in the map of our SNPA
 	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true
 
-	for i := uint(0); i < 2; i++ {
-		if (lf & (1 << i)) != 0 {
-			c.levlink[i] = NewLinkLAN(c, clns.LIndex(i), cb.quit)
+	for l := clns.Level(1); l <= 2; l++ {
+		if lf.IsLevelEnabled(l) {
+			li := l.ToIndex()
+			c.levlink[li] = NewLinkLAN(c, li, cb.updb[li], cb.quit)
 		}
 	}
 

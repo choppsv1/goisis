@@ -29,9 +29,6 @@ var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 // GlbDebug are the enable debug.
 var GlbDebug DbgFlags
 
-// GlbUpdateDB are the LSP Update DB for each level.
-var GlbUpdateDB [2]*update.DB
-
 // GlbQuit is a channel to signal go routines should end
 var GlbQuit = make(chan bool)
 
@@ -106,7 +103,8 @@ func main() {
 	}
 	for l := clns.Level(1); l <= 2; l++ {
 		if GlbISType.IsLevelEnabled(l) {
-			updb[l] = update.NewDB(l, cdb.SetAllSRM, dbdebug)
+			li := l.ToIndex()
+			updb[li] = update.NewDB(l, cdb.SetAllSRM, dbdebug)
 		}
 	}
 
@@ -117,13 +115,13 @@ func main() {
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		var lanlink *CircuitLAN
-		lanlink, err = cdb.NewCircuit(ifname, updb, 1)
+		lanlink, err = cdb.NewCircuit(ifname, GlbISType, updb)
 		if err != nil {
 			panic(fmt.Sprintf("Error creating link: %s\n", err))
 		}
 		cdb.links[ifname] = lanlink
 	}
-	for _, db := range GlbUpdateDB {
+	for _, db := range updb {
 		if db != nil {
 			go db.Run()
 		}

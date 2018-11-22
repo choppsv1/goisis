@@ -55,7 +55,7 @@ func (base *CircuitBase) readPackets(c Circuit) {
 			RecvLANHello(pdu.link, pdu, l)
 		case clns.PDUTypeLSPL1, clns.PDUTypeLSPL2:
 			debug(DbgFPkt, "Sending LSP from %s to UPD", base)
-			GlbUpdateDB[pdu.li].InputLSP(pdu.payload, pdu.pdutype, pdu.tlvs)
+			base.updb[pdu.li].InputLSP(pdu.payload, pdu.pdutype, pdu.tlvs)
 		case clns.PDUTypeCSNPL1, clns.PDUTypeCSNPL2:
 			base.snppkt <- pdu
 		default:

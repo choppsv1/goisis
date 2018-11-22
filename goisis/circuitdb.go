@@ -18,19 +18,20 @@ type CircuitDB struct {
 // NewCircuitDB allocate and initialize a new circuit database.
 //
 func NewCircuitDB() *CircuitDB {
-	cdb := new(CircuitDB)
-	cdb.links = make(map[string]interface{})
-	cdb.iihpkts = make(chan *RecvPDU)
-	cdb.snppkts = make(chan *RecvPDU)
-	return cdb
+	return &CircuitDB{
+		links:   make(map[string]interface{}),
+		iihpkts: make(chan *RecvPDU),
+		snppkts: make(chan *RecvPDU),
+	}
 }
 
 func (cdb *CircuitDB) SetAllSRM(lspid *clns.LSPID) {
 }
 
-func (cdb *CircuitDB) NewCircuit(ifname string, updb [2]*update.DB, lf clns.LevelFlag) (*CircuitLAN, error) {
+func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*update.DB) (*CircuitLAN, error) {
 	cb, err := NewCircuitBase(ifname,
 		lf,
+		updb,
 		cdb.iihpkts,
 		cdb.snppkts,
 		GlbQuit)
