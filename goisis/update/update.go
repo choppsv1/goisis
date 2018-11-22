@@ -61,13 +61,13 @@ type lspSegment struct {
 }
 
 // NewDB returns a new Update Process LSP database
-func NewDB(lindex clns.LIndex,
+func NewDB(l clns.Level,
 	setsrm func(*clns.LSPID),
 	debug func(string, ...interface{})) *DB {
 	fmt.Printf("UPD: debug: %q", debug)
 	db := &DB{
 		debug:     debug,
-		lindex:    lindex,
+		lindex:    l.ToIndex(),
 		db:        make(map[clns.LSPID]*lspSegment),
 		setsrm:    setsrm,
 		lspC:      make(chan inputPDU),

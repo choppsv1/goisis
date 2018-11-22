@@ -6,9 +6,12 @@ import (
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
 	"net"
-	"os"
 	"strings"
 )
+
+//
+// Consolidate these into instance type to support multi-instance.
+//
 
 // GlbISType specifies which levels IS-IS is enabled on
 var GlbISType clns.LevelFlag
@@ -26,29 +29,21 @@ var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 // GlbDebug are the enable debug.
 var GlbDebug DbgFlags
 
-// GlbCDB is the global circuit DB for this instance
-var GlbCDB = NewCircuitDB()
-
 // GlbUpdateDB are the LSP Update DB for each level.
 var GlbUpdateDB [2]*update.DB
 
 // GlbQuit is a channel to signal go routines should end
 var GlbQuit = make(chan bool)
 
-// Slicer grabs a slice from a byte slice given a start and length.
-func Slicer(b []byte, start int, length int) []byte {
-	return b[start : start+length]
-}
-
 func main() {
 	var err error
 
 	// XXX need to check for debug flags
-	// areaIDPtr := flag.String("areaid", "00", "area id of this instance")
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
 	isTypePtr := flag.String("istype", "level-1", "level-1, level-1-2, level-2-only")
 	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
+	areaIDPtr := flag.String("area", "00", "area of this instance")
 	flag.Parse()
 
 	if *playPtr {
@@ -62,19 +57,8 @@ func main() {
 	GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS | DbgFUpd
 
 	//
-	// Initialize System and AreaIDs
+	// Initialize instance type
 	//
-
-	GlbSystemID, err = clns.ISOEncode(*sysIDPtr)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("System ID: %s\n", GlbSystemID)
-
-	// XXX eventually support custom areas
-	GlbAreaID = make([]byte, 1)
-	GlbAreaID[0] = 0x00
-
 	switch *isTypePtr {
 	case "level-1":
 		GlbISType = clns.L1Flag
@@ -91,21 +75,40 @@ func main() {
 	fmt.Printf("IS-IS %s router\n", GlbISType)
 
 	//
-	// Initialize Update DB
+	// Initialize System and AreaIDs
 	//
-	dbdebug := func(format string, a ...interface{}) {
-		debug(DbgFUpd, format, a)
+	if GlbSystemID, err = clns.ISOEncode(*sysIDPtr); err != nil {
+		panic(err)
 	}
-	if !debugIsSet(DbgFUpd) {
-		dbdebug = func(format string, a ...interface{}) {}
+	if GlbAreaID, err = clns.ISOEncode(*areaIDPtr); err != nil {
+		panic(err)
 	}
-	for i := clns.LIndex(0); i < 2; i++ {
-		if GlbISType.IsLevelEnabled(i.ToLevel()) {
-			GlbUpdateDB[i] = update.NewDB(i, GlbCDB.SetAllSRM, dbdebug)
-		}
+	if GlbISType.IsLevelEnabled(1) {
+		fmt.Printf("System ID: %s Area ID: %s\n", GlbSystemID, GlbAreaID)
+	} else {
+		fmt.Printf("System ID: %s\n", GlbSystemID)
 	}
 
-	quit := make(chan bool)
+	//
+	// Initialize Circuit DB
+	//
+	cdb := NewCircuitDB()
+
+	//
+	// Initialize Update Process
+	//
+	var updb [2]*update.DB
+	dbdebug := func(format string, a ...interface{}) {}
+	if debugIsSet(DbgFUpd) {
+		dbdebug = func(format string, a ...interface{}) {
+			debug(DbgFUpd, format, a)
+		}
+	}
+	for l := clns.Level(1); l <= 2; l++ {
+		if GlbISType.IsLevelEnabled(l) {
+			updb[l] = update.NewDB(l, cdb.SetAllSRM, dbdebug)
+		}
+	}
 
 	//
 	// Initialize Interfaces
@@ -114,12 +117,11 @@ func main() {
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		var lanlink *CircuitLAN
-		lanlink, err = GlbCDB.NewCircuit(ifname, 1)
+		lanlink, err = cdb.NewCircuit(ifname, updb, 1)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating link: %s\n", err)
-			os.Exit(1)
+			panic(fmt.Sprintf("Error creating link: %s\n", err))
 		}
-		GlbCDB.links[ifname] = lanlink
+		cdb.links[ifname] = lanlink
 	}
 	for _, db := range GlbUpdateDB {
 		if db != nil {
@@ -127,7 +129,7 @@ func main() {
 		}
 	}
 
-	processPDUs(GlbCDB)
+	processPDUs(cdb)
 
-	close(quit)
+	close(GlbQuit)
 }

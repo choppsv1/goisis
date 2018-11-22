@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/choppsv1/goisis/clns"
+	"github.com/choppsv1/goisis/goisis/update"
 )
 
 //
@@ -27,9 +28,9 @@ func NewCircuitDB() *CircuitDB {
 func (cdb *CircuitDB) SetAllSRM(lspid *clns.LSPID) {
 }
 
-func (cdb *CircuitDB) NewCircuit(ifname string, levelf clns.LevelFlag) (*CircuitLAN, error) {
+func (cdb *CircuitDB) NewCircuit(ifname string, updb [2]*update.DB, lf clns.LevelFlag) (*CircuitLAN, error) {
 	cb, err := NewCircuitBase(ifname,
-		levelf,
+		lf,
 		cdb.iihpkts,
 		cdb.snppkts,
 		GlbQuit)
@@ -37,5 +38,5 @@ func (cdb *CircuitDB) NewCircuit(ifname string, levelf clns.LevelFlag) (*Circuit
 		return nil, err
 	}
 	// Check interface type and allocate LAN or P2P
-	return NewCircuitLAN(cb, levelf)
+	return NewCircuitLAN(cb, lf)
 }

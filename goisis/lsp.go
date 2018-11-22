@@ -31,6 +31,11 @@ package main
 // 	tlvs     map[tlv.Type][]tlv.Data
 // }
 
+// // Slicer grabs a slice from a byte slice given a start and length.
+// func Slicer(b []byte, start int, length int) []byte {
+//       return b[start : start+length]
+// }
+
 // // NewLSPSegment creates a new LSP segment
 // func NewLSPSegment(frame *RecvFrame, payload []byte, level clns.Level, tlvs map[tlv.Type][]tlv.Data) (*LSPSegment, error) {
 // 	seg := &LSPSegment{
