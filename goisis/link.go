@@ -30,30 +30,28 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 // Link represents level dependent operations on a circuit.
 //
 type Link interface {
-	// new
-	ProcessSNP(*RecvPDU) error
-	UpdateAdj(*RecvPDU) error
-
-	// same
-	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
-
-	// oldupdcode
-	DISInfoChanged()
 	ClearFlag(update.SxxFlag, *clns.LSPID)
 	ClearFlagLocked(update.SxxFlag, *clns.LSPID)
 	SetFlag(update.SxxFlag, *clns.LSPID)
 
-	// newupdcode
-	// SetFlag(seg *LSPSegment, flag SxxFlag)
-	// ClearFlag(seg *LSPSegment, flag SxxFlag)
-	// GetFlags(li uint8, flag SxxFlag) FlagSet
-	// HandleSRM(seg *LSPSegment)
-	// HandleSSN(seg *LSPSegment)
+	DISInfoChanged()
+
+	ProcessSNP(*RecvPDU) error
+
+	UpdateAdj(*RecvPDU) error
+	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
 }
 
 // =====
 // Types
 // =====
+
+type DISEvent uint8
+
+const (
+	DISEventTimer DISEvent = iota
+	DISEventInfo
+)
 
 // SendLSP is the value passed on the sendLSP channel
 type SendLSP struct {
@@ -81,16 +79,22 @@ type LinkLAN struct {
 	adjdb     *AdjDB
 
 	// Hello Process DIS
-	disTimer       *time.Timer
-	disLock        sync.Mutex
-	disInfoChanged chan bool
+	disInfoChanged chan DISEvent
 	disElected     bool
 
 	// Update Process
 	lspdb    *update.DB
-	flags    [2]map[clns.LSPID]bool
+	flags    [2]update.FlagSet
 	flagLock sync.Mutex
 	flagCond *sync.Cond
+}
+
+func (e DISEvent) String() string {
+	if e == DISEventTiemr {
+		return "DISEventTimer"
+	} else {
+		return "DISEventInfo"
+	}
 }
 
 func (link *LinkLAN) String() string {
@@ -102,20 +106,20 @@ func (link *LinkLAN) String() string {
 //
 func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool) *LinkLAN {
 	link := &LinkLAN{
-		circuit:  c,
-		l:        li.ToLevel(),
-		li:       li,
-		updb:     updb,
-		priority: clns.DefHelloPri,
-		helloInt: clns.DefHelloInt,
-		holdMult: clns.DefHelloMult,
-		flags: [2]map[clns.LSPID]bool{
-			make(map[clns.LSPID]bool),
-			make(map[clns.LSPID]bool)},
+		circuit:        c,
+		l:              li.ToLevel(),
+		li:             li,
+		updb:           updb,
+		priority:       clns.DefHelloPri,
+		helloInt:       clns.DefHelloInt,
+		holdMult:       clns.DefHelloMult,
+		disInfoChanged: make(chan DISEvent),
 	}
 	link.flagCond = sync.NewCond(&link.flagLock)
 	link.adjdb = NewAdjDB(link, link.li)
 	link.lspdb = c.updb[li]
+	link.flags[0] = make(update.FlagSet)
+	link.flags[1] = make(update.FlagSet)
 
 	lanLinkCircuitIDs[li]++
 	link.lclCircID = lanLinkCircuitIDs[li]
@@ -127,10 +131,14 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true
 
 	// Start Sending Hellos
-	go SendLANHellos(link, link.helloInt, quit)
+	go StartLANHellos(link, link.helloInt, quit)
 
 	// Start DIS election routine
-	go link.startElectingDIS()
+	dur := time.Second * time.Duration(link.helloInt*2)
+	time.AfterFunc(dur, func() {
+		debug(DbgFDIS, "INFO: %s DIS timer expired", link)
+		link.disInfoChanged <- DISEventTimer
+	})
 
 	go link.processFlags()
 
@@ -147,37 +155,10 @@ func (link *LinkLAN) UpdateAdj(pdu *RecvPDU) error {
 	return nil
 }
 
-//
-// ReElectDIS is a go routine that waits for events to trigger DIS reelection on
-// the link. Initially this is a timer, and then it's based on changes in the
-// hello process.
-//
-func (link *LinkLAN) startElectingDIS() {
-	link.disInfoChanged = make(chan bool)
-	dur := time.Second * time.Duration(link.helloInt*2)
-	link.disTimer = time.AfterFunc(dur, func() {
-		debug(DbgFDIS, "INFO: %s DIS timer expired", link)
-		link.disLock.Lock()
-		link.disTimer = nil
-		link.disLock.Unlock()
-		link.disInfoChanged <- true
-	})
-	for range link.disInfoChanged {
-		debug(DbgFDIS, "INFO: %s Received disInfoChanged notification", link)
-		link.disElect()
-	}
-}
-
-//
 // DISInfoChanged is called when something has happened to require rerunning of
-// DIS election on this LAN.
-//
+// DIS election on this Link.
 func (link *LinkLAN) DISInfoChanged() {
-	link.disLock.Lock()
-	defer link.disLock.Unlock()
-	if link.disTimer == nil {
-		link.disInfoChanged <- true
-	}
+	link.disInfoChanged <- DISEventInfo
 }
 
 //
@@ -304,7 +285,7 @@ func (link *LinkLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID) {
 
 // ClearFlagLocked clears a flag for lspid on link without locking
 func (link *LinkLAN) ClearFlagLocked(flag update.SxxFlag, lspid *clns.LSPID) {
-	delete(link.flags[flag], *lspid)
+	link.flags[flag].Remove(lspid)
 	if (GlbDebug & DbgFFlags) != 0 {
 		debug(DbgFFlags, "Clear %s on %s for %s", flag, link, lspid)
 	}
@@ -314,7 +295,7 @@ func (link *LinkLAN) ClearFlagLocked(flag update.SxxFlag, lspid *clns.LSPID) {
 func (link *LinkLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID) {
 	link.flagCond.L.Lock()
 	defer link.flagCond.L.Unlock()
-	link.flags[flag][*lspid] = true
+	link.flags[flag].Add(lspid)
 	if (GlbDebug & DbgFFlags) != 0 {
 		debug(DbgFFlags, "Set %s on %s for %s", flag, link, lspid)
 	}

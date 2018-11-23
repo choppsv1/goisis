@@ -28,44 +28,40 @@ func (f SxxFlag) String() string {
 
 // ChgSxxFlag is used for sending flag operations on channels.
 type ChgSxxFlag struct {
-	flag  SxxFlag     // flag to set or clear
-	l     clns.LIndex // level index
-	set   bool        // set or clear
-	all   bool        // all or single link
-	link  interface{} // if all then not this link otherwise this link only
-	lspid clns.LSPID
+	Flag  SxxFlag     // flag to set or clear
+	Li    clns.LIndex // level index
+	Set   bool        // set or clear
+	All   bool        // all or single link
+	Link  Circuit     // if all then not this link otherwise this link only
+	Lspid clns.LSPID
 }
 
 //
-// Used for managing flags
+// Flag owners
 //
 
-type FlagSet map[interface{}]struct{}
-
-func NewFlagSet() FlagSet {
-	return make(map[interface{}]struct{})
-}
+type FlagSet map[clns.LSPID]struct{}
 
 // Add key to set, return true if was set, false if newly set.
-func (s FlagSet) Add(key interface{}) bool {
-	if _, isSet := s[key]; !isSet {
-		s[key] = struct{}{}
+func (s FlagSet) Add(lspid *clns.LSPID) bool {
+	if _, isSet := s[*lspid]; !isSet {
+		s[*lspid] = struct{}{}
 		return true
 	}
 	return false
 }
 
 // Remove key from set, return true if key was set, false if wasn't present.
-func (s FlagSet) Remove(key interface{}) bool {
-	if _, isSet := s[key]; isSet {
-		delete(s, key)
+func (s FlagSet) Remove(lspid *clns.LSPID) bool {
+	if _, isSet := s[*lspid]; isSet {
+		delete(s, *lspid)
 		return true
 	}
 	return false
 }
 
 // Contains returns true if key is in set.
-func (s FlagSet) Contains(key interface{}) bool {
-	_, isSet := s[key]
+func (s FlagSet) Contains(lspid *clns.LSPID) bool {
+	_, isSet := s[*lspid]
 	return isSet
 }

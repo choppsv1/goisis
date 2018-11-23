@@ -87,6 +87,7 @@ type CircuitBase struct {
 	intf    *net.Interface
 	sock    raw.IntfSocket
 	lf      clns.LevelFlag
+	cdb     *CircuitDB
 	updb    [2]*update.DB
 	v4addrs []net.IPNet
 	v6addrs []net.IPNet
@@ -103,14 +104,15 @@ func (cb *CircuitBase) String() string {
 //
 // NewCircuitBase allocates and initializes a new CircuitBase structure.
 //
-func NewCircuitBase(ifname string, lf clns.LevelFlag, updb [2]*update.DB, iihpkt, snppkt chan<- *RecvPDU, quit chan bool) (*CircuitBase, error) {
+func NewCircuitBase(ifname string, lf clns.LevelFlag, cdb *CircuitDB, updb [2]*update.DB, quit chan bool) (*CircuitBase, error) {
 	var err error
 
 	cb := &CircuitBase{
 		lf:     lf,
+		cdb:    cdb,
 		updb:   updb,
-		iihpkt: iihpkt,
-		snppkt: snppkt,
+		iihpkt: cdb.iihpkt,
+		snppkt: cdb.snppkt,
 		outpkt: make(chan []byte),
 		quit:   quit,
 	}

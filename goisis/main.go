@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
-	"net"
 	"strings"
 )
 
@@ -17,7 +16,7 @@ import (
 var GlbISType clns.LevelFlag
 
 // GlbSystemID is the system ID of this IS-IS instance
-var GlbSystemID net.HardwareAddr
+var GlbSystemID []byte
 
 // GlbAreaID is the area this IS-IS instance is in.
 var GlbAreaID []byte
@@ -48,14 +47,10 @@ func main() {
 		return
 	}
 
-	//
 	// Initialize Debug
-	//
 	GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS | DbgFUpd
 
-	//
 	// Initialize instance type
-	//
 	switch *isTypePtr {
 	case "l-1":
 		GlbISType = clns.L1Flag
@@ -71,9 +66,8 @@ func main() {
 	}
 	fmt.Printf("IS-IS %s router\n", GlbISType)
 
-	//
 	// Initialize System and AreaIDs
-	//
+
 	if GlbSystemID, err = clns.ISOEncode(*sysIDPtr); err != nil {
 		panic(err)
 	}
@@ -86,14 +80,12 @@ func main() {
 		fmt.Printf("System ID: %s\n", GlbSystemID)
 	}
 
-	//
 	// Initialize Circuit DB
-	//
+
 	cdb := NewCircuitDB()
 
-	//
 	// Initialize Update Process
-	//
+
 	var updb [2]*update.DB
 	dbdebug := func(format string, a ...interface{}) {}
 	if debugIsSet(DbgFUpd) {
@@ -104,24 +96,18 @@ func main() {
 	for l := clns.Level(1); l <= 2; l++ {
 		if GlbISType.IsLevelEnabled(l) {
 			li := l.ToIndex()
-			updb[li] = update.NewDB(l, cdb.flagsC, dbdebug)
+			updb[li] = update.NewDB(GlbSystemID[:], l, cdb, dbdebug)
 		}
 	}
 
-	//
-	// Initialize Interfaces
-	//
+	// Add interfaces
+
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		_, err = cdb.NewCircuit(ifname, GlbISType, updb)
 		if err != nil {
 			panic(fmt.Sprintf("Error creating link: %s\n", err))
-		}
-	}
-	for _, db := range updb {
-		if db != nil {
-			go db.Run()
 		}
 	}
 

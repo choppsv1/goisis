@@ -16,28 +16,38 @@ import (
 	"time"
 )
 
-// SendLANHellos is a go routine that watches for hello timer events and sends
-// hellos when they are received.
-func SendLANHellos(link *LinkLAN, interval uint, quit <-chan bool) error {
+// StartLANHellos starts a go routine to send hellos and elect DIS
+func StartLANHellos(link *LinkLAN, interval uint, quit <-chan bool) {
+
 	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, interval)
 	ival := time.Second * time.Duration(interval)
 	ticker := time.NewTicker(ival) // XXX replace with jittered timer.
-	go func() {
-		sendLANHello(link)
-		debug(DbgFPkt, "Sent initial IIH on %s entering ticker loop", link)
-		for range ticker.C {
+	go sendLANHellos(ticker.C, link, quit)
+}
+
+// sendLANHellos is a go routine that sends hellos based using a ticker
+// It also processes DIS update events.
+func sendLANHellos(tickC <-chan Time, link *LinkLAN, quit <-chan bool) {
+	disWaiting := DISEventTimer // First wait for timer event
+	sendLANHello(link)
+	debug(DbgFPkt, "Sent initial IIH on %s entering ticker loop", link)
+	for {
+		select {
+		case <-quit:
+			debug(DbgFPkt, "Stop sending IIH on %s", link)
+			return
+		case e := link.disInfoChanged:
+			if e != disWaiting {
+				debug(DbgFDIS, "INFO: Suppress DIS event %s on %s", e, link)
+			} else {
+				debug(DbgFDIS, "INFO: Process DIS event %s on %s", e, link)
+				disWaiting = DISEventInfo // now wait for normal info changes.
+				link.disElect()
+			}
+		case <-tickC:
 			sendLANHello(link)
 		}
-	}()
-	// Wait for quit ... do we need to do this or will the ticker stop
-	// automatically? What about when ticker goes out of scope will it be
-	// GCed?
-	select {
-	case <-quit:
-		ticker.Stop()
-		debug(DbgFPkt, "Stop sending IIH on %s", link)
 	}
-	return nil
 }
 
 func sendLANHello(link *LinkLAN) error {

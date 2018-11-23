@@ -35,6 +35,15 @@ func playground() {
 	var tlvBData = []byte(tlvData)
 	var ab = make([]byte, 6)
 	var a addr = ab
+	m := make(map[int]int)
+
+	v := m[0]
+	fmt.Printf("val: %d\n", v)
+
+	// arr := [3]int{0, 1, 2}
+	// aslice := arr[:]
+	// var arrp *[3]int
+	// arrp = aslice
 
 	// ip, net := raw.GetInterfacePrefix("vboxnet3")
 	// fmt.Printf("interface addr: %s net: %s\n", ip, net)
