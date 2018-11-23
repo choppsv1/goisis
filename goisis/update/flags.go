@@ -32,7 +32,7 @@ type ChgSxxFlag struct {
 	Li    clns.LIndex // level index
 	Set   bool        // set or clear
 	All   bool        // all or single link
-	Link  Circuit     // if all then not this link otherwise this link only
+	C     interface{} // if all then not this link otherwise this link only
 	Lspid clns.LSPID
 }
 

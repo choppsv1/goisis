@@ -10,7 +10,6 @@ import (
 //
 type CircuitDB struct {
 	circuits map[string]Circuit
-	dis      [2][256]bool
 	flagsC   chan update.ChgSxxFlag
 	iihpkts  chan *RecvPDU
 	snppkts  chan *RecvPDU
@@ -46,23 +45,6 @@ func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*upda
 	return cll, err
 }
 
-// GetFlagsC returns the flags channel for this circuit DB.
-func (cdb *CircuitDB) GetFlagsC() chan<- update.ChgSxxFlag {
-	return cdb.flagsC
-}
-
-// SetDIS updates whether we are DIS on the circuit (LAN) ID for the level.
-func (cdb *CircuitDB) SetDIS(li clns.LIndex, uint8 cid, isDis bool) {
-	// XXX no lock! Fix this to not need one, called from link hello go routine
-	cdb.dis[li][cid] = isDis
-}
-
-// IsDIS checks whether we are DIS on the circuit (LAN) ID for the level.
-func (cdb *CircuitDB) IsDIS(li clns.LIndex, uint8 cid) bool {
-	// XXX no lock! Fix this to not need one, called from update process.
-	return cdb.dis[li][cid]
-}
-
 // // SetAllFlag sets the given flag for the given LSPID on all circuits except 'not'
 // func (cdb *CircuitDB) SetAllFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex, not Circuit) {
 // 	for _, c := range cdb.circuits {
@@ -87,15 +69,16 @@ func (cdb *CircuitDB) processFlag(cf *update.ChgSxxFlag) {
 	if !cf.All {
 		panic("Invalid non-all sent to circuitDB")
 	}
+	cfc := cf.C.(Circuit)
 	if cf.Set {
 		for _, c := range cdb.circuits {
-			if c != cf.Link {
+			if c != cfc {
 				c.SetFlag(cf.Flag, &cf.Lspid, cf.Li)
 			}
 		}
 	} else {
 		for _, c := range cdb.circuits {
-			if c != cf.Link {
+			if c != cfc {
 				c.ClearFlag(cf.Flag, &cf.Lspid, cf.Li)
 				continue
 			}

@@ -33,6 +33,7 @@ type Link interface {
 	ClearFlag(update.SxxFlag, *clns.LSPID)
 	ClearFlagLocked(update.SxxFlag, *clns.LSPID)
 	SetFlag(update.SxxFlag, *clns.LSPID)
+	IsP2P() bool
 
 	DISInfoChanged()
 
@@ -49,8 +50,8 @@ type Link interface {
 type DISEvent uint8
 
 const (
-	DISEventTimer DISEvent = iota
-	DISEventInfo
+	DISEventTimer DISEvent = iota // DIS Timer has expired.
+	DISEventInfo                  // DIS Info has changed.
 )
 
 // SendLSP is the value passed on the sendLSP channel
@@ -90,7 +91,7 @@ type LinkLAN struct {
 }
 
 func (e DISEvent) String() string {
-	if e == DISEventTiemr {
+	if e == DISEventTimer {
 		return "DISEventTimer"
 	} else {
 		return "DISEventInfo"
@@ -229,6 +230,30 @@ func (link *LinkLAN) disFindBest() (bool, *Adj) {
 	return elect == nil, elect
 }
 
+func (link *LinkLAN) disSelfElect() {
+	// Always let the update process know.
+	link.updb.SetDIS(link.lclCircID, true)
+
+	if link.disElected {
+		return
+	}
+	link.disElected = true
+
+	// XXX Start the CNSP timer.
+}
+
+func (link *LinkLAN) disSelfResign() {
+	// Always let the update process know.
+	link.updb.SetDIS(link.lclCircID, false)
+
+	if !link.disElected {
+		return
+	}
+	link.disElected = false
+
+	// XXX Stop CNSP timer.
+}
+
 func (link *LinkLAN) disElect() {
 	debug(DbgFDIS, "Running DIS election on %s", link)
 
@@ -255,21 +280,16 @@ func (link *LinkLAN) disElect() {
 	debug(DbgFDIS, "DIS change: old %s new %s", oldLANID, newLANID)
 
 	if !electUs {
-		if link.disElected {
-			link.disElected = false
-			// XXX perform DIS resign duties
-		}
+		link.disSelfResign()
 		if electOther == nil {
-			// XXX No DIS
+			// XXX No DIS -- maybe put a zero here?
 			link.lanID = link.ourlanID
 		} else {
 			link.lanID = newLANID
 		}
-	} else if !link.disElected {
-		link.disElected = true
-		// XXX start new DIS duties
+	} else {
+		link.disSelfElect()
 	}
-	// XXX Update Process: signal DIS change
 }
 
 // --------
@@ -417,4 +437,8 @@ func (link *LinkLAN) getPSNPLocked() ether.Frame {
 	link.circuit.ClosePDU(etherp, endp)
 
 	return etherp
+}
+
+func (link *LinkLAN) IsP2P() bool {
+	return false
 }

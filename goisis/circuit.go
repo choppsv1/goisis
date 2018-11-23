@@ -49,6 +49,7 @@ var clnsTemplate = []uint8{
 // Circuit is an IS-IS/CLNS physical interface.
 //
 type Circuit interface {
+	IsP2P() bool
 	ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex)
 	ClosePDU(ether.Frame, []byte)
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
@@ -111,8 +112,8 @@ func NewCircuitBase(ifname string, lf clns.LevelFlag, cdb *CircuitDB, updb [2]*u
 		lf:     lf,
 		cdb:    cdb,
 		updb:   updb,
-		iihpkt: cdb.iihpkt,
-		snppkt: cdb.snppkt,
+		iihpkt: cdb.iihpkts,
+		snppkt: cdb.snppkts,
 		outpkt: make(chan []byte),
 		quit:   quit,
 	}
@@ -289,4 +290,8 @@ func (c *CircuitLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIn
 // ClearFlag sets the given flag for the given LSPID for the given level (li)
 func (c *CircuitLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
 	c.levlink[li].ClearFlag(flag, lspid)
+}
+
+func (c *CircuitLAN) IsP2P() bool {
+	return false
 }

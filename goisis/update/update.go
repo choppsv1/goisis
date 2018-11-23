@@ -11,26 +11,27 @@ import (
 	"time"
 )
 
+// ==========
+// Interfaces
+// ==========
+
+// Link is the interface that update requires for circuits.
+type Circuit interface {
+	ClearFlag(flag SxxFlag, lspid *clns.LSPID, li clns.LIndex)
+	SetFlag(flag SxxFlag, lspid *clns.LSPID, li clns.LIndex)
+	IsP2P() bool
+}
+
 // =====
 // Types
 // =====
 
-// Circuit interface used by the Update Process
-type CircuitDB interface {
-	IsDIS(li clns.LIndex, pnid uint8) bool
-	GetFlagsC() chan<- ChgSxxFlag
-}
-
-type Circuit interface {
-	ClearFlag(flag SxxFlag, lspid *clns.LSPID, li clns.LIndex)
-	SetFlag(flag SxxFlag, lspid *clns.LSPID, li clns.LIndex)
-}
-
 // DB holds all LSP for a given level.
 type DB struct {
 	sysid   clns.SystemID
+	dis     [256]Trit
+	disC    chan chgDIS
 	lspC    chan inputPDU
-	cdb     CircuitDB
 	flagsC  chan<- ChgSxxFlag
 	getlspC chan inputGetLSP
 	getsnpC chan inputGetSNP
@@ -40,6 +41,11 @@ type DB struct {
 	debug   func(string, ...interface{})
 }
 
+type chgDIS struct {
+	set bool  // set or clear
+	cid uint8 // circuit ID
+}
+
 // ErrIIH is a general error in IIH packet processing
 type ErrLSP string
 
@@ -47,8 +53,30 @@ func (e ErrLSP) Error() string {
 	return fmt.Sprintf("ErrLSP: %s", string(e))
 }
 
+type Trit int8
+
+func (trit Trit) String() string {
+	switch trit {
+	case -1:
+		return "False"
+	case 0:
+		return "Unkonwn"
+	case 1:
+		return "True"
+	default:
+		panic("invalid trit")
+	}
+}
+func BoolToTrit(b bool) Trit {
+	if b {
+		return 1
+	}
+	return -1
+}
+
 // inputPDU is the PDU input to the udpate process
 type inputPDU struct {
+	c       Circuit
 	payload []byte
 	pdutype clns.PDUType
 	tlvs    map[tlv.Type][]tlv.Data
@@ -102,12 +130,12 @@ func (result lspCompareResult) String() string {
 }
 
 // NewDB returns a new Update Process LSP database
-func NewDB(sysid []byte, l clns.Level, cdb CircuitDB, debug func(string, ...interface{})) *DB {
+func NewDB(sysid []byte, l clns.Level, flagsC chan<- ChgSxxFlag, debug func(string, ...interface{})) *DB {
 	fmt.Printf("UPD: debug: %p", debug)
 	db := &DB{
 		debug:   debug,
 		li:      l.ToIndex(),
-		cdb:     cdb,
+		flagsC:  flagsC,
 		db:      make(map[clns.LSPID]*lspSegment),
 		lspC:    make(chan inputPDU),
 		getlspC: make(chan inputGetLSP),
@@ -165,8 +193,13 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 		}
 	}
 
-	db.lspC <- inputPDU{payload, pdutype, tlvs}
+	db.lspC <- inputPDU{c, payload, pdutype, tlvs}
 	return nil
+}
+
+// SetDIS sets or clears if we are DIS for the circuit ID.
+func (db *DB) SetDIS(cid uint8, set bool) {
+	db.disC <- chgDIS{set, cid}
 }
 
 // CopyLSPPayload copies the LSP payload buffer for sending if found and returns
@@ -189,7 +222,8 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 }
 
 //
-// Internal Functionality only called in the update go routine, no locking required.
+// Internal Functionality only called in the update go routine, no locking
+// required.
 //
 
 // String returns a string identifying the LSP DB lock must be held
@@ -377,12 +411,11 @@ func (db *DB) updateLSPLifetime(lsp *lspSegment) {
 }
 
 // receiveLSP receives an LSP from flooding
-func (db *DB) receiveLSP(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
+func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
 	var lspid clns.LSPID
 	copy(lspid[:], payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
 
 	lsp := db.db[lspid]
-	llifetime := lsp.getLifetime()
 
 	newhdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	nlifetime := pkt.GetUInt16(newhdr[clns.HdrLSPLifetime:])
@@ -390,21 +423,30 @@ func (db *DB) receiveLSP(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type
 	result := compareLSP(lsp, newhdr)
 	isOurs := bytes.Equal(lspid[:clns.SysIDLen], db.sysid[:])
 
+	// b) If the LSP has zero Remaining Lifetime, perform the actions
+	//    described in 7.3.16.4. -- for LSPs not ours this is the same as
+	//    normal handling except that we do not add a missing LSP segment,
+	//    instead we acknowledge receipt only.
+
 	if isOurs {
 		pnid := lsp.lspid[7]
 		var unsupported bool
 		if pnid == 0 {
 			unsupported = false // always support non-pnode LSP
 		} else {
-			unsupported = lsp == nil || db.cdb.IsDIS(db.li, pnid)
+			unsupported = lsp == nil || db.dis[pnid] <= 0
+			if db.dis[pnid] == 0 {
+				// We haven't decided who is DIS yet. We may not
+				// want to purge until we have.
+				// XXX
+			}
 		}
-		// b) If the LSP has zero Remaining Lifetime, perform the
-		//    actions described in 7.3.16.4. -- for LSPs not ours this
-		//    is the same as normal handling except that we do not add a
-		//    missing LSP segment, instead we acknowledge receipt only.
+		// c) Ours, but we don't support, and not expired, perform
+		//    7.3.16.4 purge. If ours not supported and expired we will
+		//    simply be ACKing the receipt below under e1.
 		if unsupported && nlifetime != 0 {
 			if lsp != nil {
-				if result != NEWER || llifetime == 0 {
+				if result != NEWER || lsp.getLifetime() == 0 {
 					panic("Bad branch")
 				}
 			} else {
@@ -416,7 +458,8 @@ func (db *DB) receiveLSP(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type
 				return
 			}
 		}
-		// d) Ours, supported and wire is newer, need to increment our copy per 7.3.16.1
+		// d) Ours, supported and wire is newer, need to increment our
+		// copy per 7.3.16.1
 		if !unsupported && result == NEWER {
 			// If this is supported we better have a non-expired LSP in the DB.
 			//assert dblsp
@@ -426,22 +469,58 @@ func (db *DB) receiveLSP(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type
 		}
 
 	}
+
+	// [ also: ISO 10589 17.3.16.4: a, b ]
+	// e1) Newer - update db, flood and acknowledge
+	//     [ also: ISO 10589 17.3.16.4: b.1 ]
+	if result == NEWER {
+		if lsp != nil {
+			db.debug("Updating LSP from %s", c)
+			db.updateLSPSegment(lsp, payload, pdutype, tlvs)
+		} else {
+			db.debug("Added LSP from %s", c)
+			if nlifetime == 0 {
+				// 17.3.16.4: a
+				// XXX send ack on circuit do not retain
+				return
+			}
+			lsp = db.newLSPSegment(payload, pdutype, tlvs)
+			db.db[lspid] = lsp
+		}
+
+		db.setAllFlag(SRM, &lsp.lspid, c)
+		db.clearFlag(SRM, &lsp.lspid, c)
+		if c.IsP2P() {
+			db.setFlag(SSN, &lsp.lspid, c)
+		}
+		db.clearAllFlag(SSN, &lsp.lspid, c)
+	} else if result == SAME {
+		// e2) Same - Stop sending and Acknowledge
+		//     [ also: ISO 10589 17.3.16.4: b.2 ]
+		db.clearAllFlag(SRM, &lsp.lspid, nil)
+		if c.IsP2P() {
+			db.setFlag(SSN, &lsp.lspid, c)
+		}
+	} else {
+		// e3) Older - Send and don't acknowledge
+		//     [ also: ISO 10589 17.3.16.4: b.3 ]
+		db.setFlag(SRM, &lsp.lspid, c)
+		db.clearFlag(SSN, &lsp.lspid, c)
+		db.clearAllFlag(SRM, &lsp.lspid, nil)
+	}
 }
 
 // updateLSP updates an lspSegment with a newer version received on a link.
-func (db *DB) updateLSP(lsp *lspSegment, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
+func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
 	if db.debug != nil {
 		db.debug("Updating %s", lsp)
 	}
 
-	newhdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
-	compareLSP(lsp, newhdr)
-
-	// // XXX I think this is wrong... we need to understand this better.
-	// if !lsp.holdTimer.Stop() {
-	// 	// if timer wasn't active drain it.
-	// 	<-lsp.holdTimer.C
-	// }
+	// XXX I think this is wrong... we need to understand this better.
+	if !lsp.holdTimer.Stop() {
+		// if timer wasn't active drain it.
+		<-lsp.holdTimer.C
+	}
 
 	// if lsp.isOurs {
 	// 	pnid := lsp.lspid[7]
@@ -481,16 +560,16 @@ func (db *DB) updateLSP(lsp *lspSegment, payload []byte, pdutype clns.PDUType, t
 
 func (db *DB) runOnce() {
 	select {
-	case in := <-db.lspC:
-		var lspid clns.LSPID
-		copy(lspid[:], in.payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
-		lsp, ok := db.db[lspid]
-		if ok {
-			db.updateLSP(lsp, in.payload, in.pdutype, in.tlvs)
-		} else {
-			lsp := db.newLSPSegment(in.payload, in.pdutype, in.tlvs)
-			db.db[lspid] = lsp
+	case in := <-db.disC:
+		if db.dis[in.cid] == BoolToTrit(in.set) {
+			break
 		}
+		db.debug("UPD: DIS Change for %d to %d", in.cid, in.set)
+		db.dis[in.cid] = BoolToTrit(in.set)
+		// XXX Originate or Purge PNode.
+
+	case in := <-db.lspC:
+		db.receiveLSP(in.c, in.payload, in.pdutype, in.tlvs)
 
 	case in := <-db.getsnpC:
 		lsp, ok := db.db[*in.lspid]

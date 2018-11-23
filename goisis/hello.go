@@ -27,7 +27,7 @@ func StartLANHellos(link *LinkLAN, interval uint, quit <-chan bool) {
 
 // sendLANHellos is a go routine that sends hellos based using a ticker
 // It also processes DIS update events.
-func sendLANHellos(tickC <-chan Time, link *LinkLAN, quit <-chan bool) {
+func sendLANHellos(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 	disWaiting := DISEventTimer // First wait for timer event
 	sendLANHello(link)
 	debug(DbgFPkt, "Sent initial IIH on %s entering ticker loop", link)
@@ -36,7 +36,7 @@ func sendLANHellos(tickC <-chan Time, link *LinkLAN, quit <-chan bool) {
 		case <-quit:
 			debug(DbgFPkt, "Stop sending IIH on %s", link)
 			return
-		case e := link.disInfoChanged:
+		case e := <-link.disInfoChanged:
 			if e != disWaiting {
 				debug(DbgFDIS, "INFO: Suppress DIS event %s on %s", e, link)
 			} else {
