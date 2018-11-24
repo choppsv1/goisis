@@ -5,6 +5,52 @@ import (
 	"time"
 )
 
+// HoldTimer opaque values for the hold timer.
+type HoldTimer struct {
+	t   *time.Timer
+	end time.Time
+}
+
+// NewHoldTimer creates a new hold timer.
+func NewHoldTimer(holdtime uint16, expireF func()) *HoldTimer {
+	ns := time.Second * time.Duration(holdtime)
+	return &HoldTimer{
+		t:   time.AfterFunc(ns, expireF),
+		end: time.Now().Add(ns),
+	}
+}
+
+// Stop stops the hold timer if it can, if not it returns false.
+func (t *HoldTimer) Stop() bool {
+	return t.t.Stop()
+}
+
+// Reset resets the timer if possible, if it has already fired then false is
+// returned.
+func (t *HoldTimer) Reset(holdtime uint16) bool {
+	if !t.t.Stop() {
+		// The timer has fire the function has is is being called.
+		return false
+	}
+	ns := time.Second * time.Duration(holdtime)
+	t.end = time.Now().Add(ns)
+	t.t.Reset(ns)
+	return true
+}
+
+// Until returns the number of seconds until the timer will fire.
+func (t *HoldTimer) Until() uint16 {
+	if d := time.Until(t.end); d < 0 {
+		return 0
+	} else {
+		return uint16(d / time.Second)
+	}
+}
+
+//
+// We don't use this.
+//
+
 // Timeout measures the amount of time left for some event. It can be thought of
 // as a passive timer.
 type Timeout struct {

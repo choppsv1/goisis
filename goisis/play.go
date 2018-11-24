@@ -37,6 +37,11 @@ func playground() {
 	var a addr = ab
 	m := make(map[int]int)
 
+	t := time.AfterFunc(10*time.Second, func() {})
+	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
+	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
+	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
+
 	v := m[0]
 	fmt.Printf("val: %d\n", v)
 

@@ -130,13 +130,14 @@ func (c *CircuitLAN) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
 	}
 	pdu.l = l
 
-	pdu.link = c.levlink[l-1]
-	if pdu.link == nil {
-		debug(DbgFPkt, "Dropping frame as L%s not enabled on %s", l, c)
+	// Check for expected ether dst (correct mcast or us)
+	if !c.lf.IsLevelEnabled(l) {
+		debug(DbgFPkt, "Dropping %s frame not enabled on %s", l, c)
 		return nil
 	}
 
-	// Check for expected ether dst (correct mcast or us)
+	pdu.link = c.levlink[l-1]
+
 	if !bytes.Equal(pdu.dst, clns.AllLxIS[l-1]) {
 		if !bytes.Equal(pdu.dst, c.getOurSNPA()) {
 

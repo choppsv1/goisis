@@ -8,14 +8,13 @@ import (
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
-	"time"
 )
 
 // ==========
 // Interfaces
 // ==========
 
-// Link is the interface that update requires for circuits.
+// Circuit is the interface that update requires for circuits.
 type Circuit interface {
 	ClearFlag(flag SxxFlag, lspid *clns.LSPID, li clns.LIndex)
 	SetFlag(flag SxxFlag, lspid *clns.LSPID, li clns.LIndex)
@@ -98,16 +97,15 @@ type inputGetSNP struct {
 
 // lspSegment represents an LSP segment from an IS.
 type lspSegment struct {
-	payload      []byte
-	hdr          []byte
-	tlvs         map[tlv.Type][]tlv.Data
-	lspid        clns.LSPID
-	li           clns.LIndex
-	lifetime     *xtime.Timeout
-	zeroLifetime *xtime.Timeout
-	holdTimer    *time.Timer
-	isAck        bool
-	isOurs       bool
+	payload  []byte
+	hdr      []byte
+	tlvs     map[tlv.Type][]tlv.Data
+	lspid    clns.LSPID
+	li       clns.LIndex
+	life     *xtime.HoldTimer
+	zeroLife *xtime.HoldTimer
+	isAck    bool
+	isOurs   bool
 }
 
 type lspCompareResult int
@@ -232,7 +230,7 @@ func (lsp *lspSegment) String() string {
 	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v cksum:%#04x",
 		s,
 		lsp.getSeqNo(),
-		lsp.getLifetime(),
+		lsp.getUpdLifetime(),
 		lsp.getCksum())
 }
 
@@ -268,11 +266,10 @@ func (db *DB) newLSPSegment(payload []byte, pdutype clns.PDUType, tlvs map[tlv.T
 	}
 	copy(lsp.lspid[:], hdr[clns.HdrLSPLSPID:])
 
-	lifesec := int(pkt.GetUInt16(hdr[clns.HdrLSPLifetime:]))
-	lsp.lifetime = xtime.NewTimeoutSec(lifesec)
-	lsp.holdTimer = time.AfterFunc(lsp.lifetime.Remaining(),
-		func() { db.expireC <- lsp.lspid })
-
+	lifesec := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
+	// XXX testing
+	lifesec = 30
+	lsp.life = xtime.NewHoldTimer(lifesec, func() { db.expireC <- lsp.lspid })
 	lsp.isOurs = bytes.Equal(lsp.lspid[:clns.SysIDLen], db.sysid[:])
 	// // We aren't locked but this isn't in the DB yet.
 	// if lsp.isOurs {
@@ -292,8 +289,16 @@ func (lsp *lspSegment) getSeqNo() uint32 {
 	return pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:])
 }
 
-func (lsp *lspSegment) getLifetime() uint16 {
-	return pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:])
+func (lsp *lspSegment) getUpdLifetime() uint16 {
+	if lsp.life == nil {
+		if pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:]) != 0 {
+			panic("Invaild non-zero life with no holdtimer")
+		}
+		return 0
+	}
+	lifetime := lsp.life.Until()
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], lifetime)
+	return lifetime
 }
 
 func (lsp *lspSegment) setLifetime(sec uint16) {
@@ -332,7 +337,7 @@ func compareLSP(lsp *lspSegment, newhdr []byte) lspCompareResult {
 	}
 
 	nlifetime := pkt.GetUInt16(newhdr[clns.HdrLSPLifetime:])
-	olifetime := lsp.getLifetime()
+	olifetime := lsp.getUpdLifetime()
 	if nlifetime == 0 && olifetime != 0 {
 		return NEWER
 	} else if olifetime == 0 && nlifetime != 0 {
@@ -341,35 +346,33 @@ func compareLSP(lsp *lspSegment, newhdr []byte) lspCompareResult {
 	return SAME
 }
 
-// recvPurgeLSP handles a received lifetime == 0 LSPSegment
-func (db *DB) recvPurgeLSP(lsp *lspSegment) {
-	if lsp.zeroLifetime == nil {
-		lsp.zeroLifetime = xtime.NewTimeout(clns.ZeroMaxAgeDur)
-	} else if lsp.zeroLifetime.Remaining() < clns.ZeroMaxAgeDur {
-		// this is due to a seqno Update
-		lsp.zeroLifetime.Reset(clns.ZeroMaxAgeDur)
-	}
-	lsp.holdTimer.Reset(lsp.zeroLifetime.Remaining())
-	if db.debug != nil {
-		db.debug("Updated zero-lifetime LSP %s to %s", lsp, lsp.holdTimer)
-	}
-}
-
 // initiatePurgeLSP initiates a purge of an LSPSegment due to lifetime running
 // to zero.
 func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
+	var zeroMaxAge uint16
+
+	// If we still have a timer still stop it if we can.
+	if lsp.life == nil {
+		zeroMaxAge = clns.ZeroMaxAge
+	} else {
+		if !lsp.life.Stop() {
+			// Can't stop the timer we will be called again.
+			return
+		}
+		// We hold on to LSPs that we force purge longer.
+		zeroMaxAge = clns.MaxAge
+		lsp.life = nil
+	}
+
 	// Update the lifetime to zero if it wasn't already.
 	pkt.PutUInt16(lsp.hdr[:clns.HdrLSPLifetime], 0)
+	db.debug("Lifetime for %s expired, purging.", lsp)
 
-	if db.debug != nil {
-		db.debug("Lifetime for %s expired, purging.", lsp)
+	if lsp.zeroLife != nil {
+		panic("Initiating a purge on a purged LSP")
 	}
-
-	lsp.zeroLifetime = xtime.NewTimeout(clns.ZeroMaxAgeDur)
-	wasActive := lsp.holdTimer.Reset(lsp.zeroLifetime.Remaining())
-	if wasActive {
-		db.debug("XXX hold timer was active when it should not have been")
-	}
+	lsp.zeroLife = xtime.NewHoldTimer(zeroMaxAge,
+		func() { db.expireC <- lsp.lspid })
 
 	//-----------------------------
 	// ISO10589: 7.3.16.4: a, b, c
@@ -384,30 +387,6 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 	lsp.payload = lsp.payload[:pdulen]
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
-}
-
-func (db *DB) updateLSPLifetime(lsp *lspSegment) {
-	// Update the lifetime value of this LSP possibly initiating a purge
-	if lsp.getLifetime() > 0 {
-		lifetime := lsp.lifetime.RemainingSec()
-		lsp.setLifetime(uint16(lifetime))
-		if lifetime == 0 {
-			// We've noticed lifetime going to zero prior
-			// our timer firing, purge it now.
-
-			// Stop our timer now as we are going to purge.
-			if !lsp.holdTimer.Stop() {
-				// if timer wasn't active drain it.
-				<-lsp.holdTimer.C
-			}
-			db.initiatePurgeLSP(lsp)
-		}
-	} else {
-		// lifetime already zero we have to be purging still
-		if lsp.zeroLifetime == nil {
-			panic("zeroLifetime not set on expired LSP")
-		}
-	}
 }
 
 // receiveLSP receives an LSP from flooding
@@ -429,6 +408,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs m
 	//    instead we acknowledge receipt only.
 
 	if isOurs {
+		// XXX check all this.
 		pnid := lsp.lspid[7]
 		var unsupported bool
 		if pnid == 0 {
@@ -446,7 +426,8 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs m
 		//    simply be ACKing the receipt below under e1.
 		if unsupported && nlifetime != 0 {
 			if lsp != nil {
-				if result != NEWER || lsp.getLifetime() == 0 {
+				// XXX check this panic out closer. XXX
+				if result != NEWER || lsp.getUpdLifetime() == 0 {
 					panic("Bad branch")
 				}
 			} else {
@@ -473,6 +454,23 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs m
 	// [ also: ISO 10589 17.3.16.4: a, b ]
 	// e1) Newer - update db, flood and acknowledge
 	//     [ also: ISO 10589 17.3.16.4: b.1 ]
+	if result == NEWER {
+		if lsp != nil && lsp.life != nil {
+			if !lsp.life.Stop() {
+				// This means the LSP segment just expired and we were
+				// unable to stop the hold timer b/c we haven't
+				// handled the event yet.  We need to recheck
+				// NEWER now, it will either remain NEWER or
+				// switch to SAME.
+				result = compareLSP(lsp, newhdr)
+			} else {
+				// We've now stopped the timer we would have
+				// reset it anyway in updateLSPSegment.
+
+			}
+		}
+	}
+
 	if result == NEWER {
 		if lsp != nil {
 			db.debug("Updating LSP from %s", c)
@@ -516,11 +514,7 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, pdutype clns.PDU
 		db.debug("Updating %s", lsp)
 	}
 
-	// XXX I think this is wrong... we need to understand this better.
-	if !lsp.holdTimer.Stop() {
-		// if timer wasn't active drain it.
-		<-lsp.holdTimer.C
-	}
+	// On entering the hold timer has already been stopped by receiveLSP
 
 	// if lsp.isOurs {
 	// 	pnid := lsp.lspid[7]
@@ -530,32 +524,57 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, pdutype clns.PDU
 	// relinquishing our reference on that previous PDU frame
 	lsp.payload = payload
 	lsp.hdr = Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
-	lifetime := time.Duration(pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:])) * time.Second
+	lsp.tlvs = tlvs
 
-	// This LSP is now being purged
+	lifetime := pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:])
 	if lifetime == 0 {
-		db.recvPurgeLSP(lsp)
+		if lsp.life != nil {
+			// Timer is stopped. Forget about it.
+			lsp.life = nil
+		}
+		if lsp.zeroLife == nil {
+			// New purge.
+			db.debug("Received Purge LSP %s", lsp)
+			lsp.zeroLife = xtime.NewHoldTimer(clns.ZeroMaxAge,
+				func() { db.expireC <- lsp.lspid })
+		} else if lsp.zeroLife.Until() < clns.ZeroMaxAge {
+			// Refresh zero age. If we can't reset the timer b/c
+			// it's firing just create a new one. We handle it.
+			if !lsp.zeroLife.Reset(clns.ZeroMaxAge) {
+				lsp.zeroLife = xtime.NewHoldTimer(clns.ZeroMaxAge,
+					func() { db.expireC <- lsp.lspid })
+			}
+		}
 		return
 	}
 
-	// Reset the hold timer
-	lsp.zeroLifetime = nil
-	lsp.lifetime.Reset(lifetime)
-	lsp.holdTimer.Reset(lifetime)
+	if lsp.life != nil {
+		// Reset the hold timer
+		lsp.life.Reset(lifetime)
+	} else {
+		// We should never see both nil we would have deleted it.
+		if lsp.zeroLife == nil {
+			panic(fmt.Sprintf("WARNING: both life and zero nil for %s", lsp))
+		}
+		// No need to check if we sotpped as we can handle being
+		// called now after update.
+		lsp.zeroLife.Stop()
+		lsp.zeroLife = nil
+		lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
+	}
 
+	// XXX update refresh timer?
 	// if lsp.isOurs {
-	// 	// assert(lsp.refreshTimer != nil)
-	// 	timeleft := lifetime * 3 / 4
-	// 	// assert timeleft
-	// 	if !lsp.refreshTimer.Stop() {
-	// 		<-lsp.refreshTimer.C
-	// 	}
-	// 	lsp.refreshTimer.Reset(timeleft)
+	//      // assert(lsp.refreshTimer != nil)
+	//      timeleft := lifetime * 3 / 4
+	//      // assert timeleft
+	//      if !lsp.refreshTimer.Stop() {
+	//              <-lsp.refreshTimer.C
+	//      }
+	//      lsp.refreshTimer.Reset(timeleft)
 	// }
 
-	if db.debug != nil {
-		db.debug("Updated %s", lsp)
-	}
+	db.debug("Updated %s", lsp)
 }
 
 func (db *DB) runOnce() {
@@ -571,26 +590,9 @@ func (db *DB) runOnce() {
 	case in := <-db.lspC:
 		db.receiveLSP(in.c, in.payload, in.pdutype, in.tlvs)
 
-	case in := <-db.getsnpC:
-		lsp, ok := db.db[*in.lspid]
-		if !ok {
-			in.result <- false
-			break
-		}
-		db.updateLSPLifetime(lsp)
-		copy(in.ent, lsp.hdr[clns.HdrLSPLifetime:clns.HdrLSPFlags])
-		in.result <- true
-
-	case in := <-db.getlspC:
-		lsp, ok := db.db[*in.lspid]
-		if !ok {
-			in.result <- 0
-			break
-		}
-		db.updateLSPLifetime(lsp)
-		in.result <- copy(in.payload, lsp.payload)
-
+	// Do things above this that may affect expiration of LSP segment
 	case lspid := <-db.expireC:
+		db.debug("1) <-expireC %s", lspid)
 		// Come in here 2 ways, either with zeroLifetime non-nil but
 		// expired in which case we should be good to remove, or nil
 		// b/c the hold timer fired for this LSP.
@@ -600,24 +602,51 @@ func (db *DB) runOnce() {
 			db.debug("Warning: <-expireC %s not present", lspid)
 			break
 		}
-		if !lsp.lifetime.IsExpired() {
-			// Must have updated the LSP to not be expired.
-			db.debug("<-expireC: %s ressurected", lspid)
+		db.debug("2) <-expireC %s", lspid)
+		if lsp.life != nil && lsp.life.Until() != 0 {
+			db.debug("<-expireC: %s ressurected", lsp)
 			break
 		}
-		if lsp.zeroLifetime != nil {
-			if !lsp.zeroLifetime.IsExpired() {
-				panic("expiring non-zero lifetime expired LSP")
+		db.debug("3) <-expireC %s", lspid)
+		if lsp.zeroLife == nil {
+			db.debug("4) <-expireC %s", lspid)
+			db.initiatePurgeLSP(lsp)
+		} else {
+			db.debug("5) <-expireC %s", lspid)
+			// Purge complete
+			if lsp.life != nil {
+				panic("Non-zero lifetime in zero max age")
 			}
-			lsp.zeroLifetime = nil
-			if db.debug != nil {
-				db.debug("Removing zero-lifetime LSP %s", lsp)
+			db.debug("6) <-expireC %s", lspid)
+			if lsp.zeroLife.Until() != 0 {
+				db.debug("<-expireC: zeroLife %s ressurected", lsp)
+			} else {
+				lsp.zeroLife = nil
+				db.debug("Deleting LSP %s", lsp)
+				delete(db.db, lsp.lspid)
 			}
-			delete(db.db, lsp.lspid)
+			db.debug("7) <-expireC %s", lspid)
+		}
+		db.debug("8) <-expireC %s", lspid)
+	case in := <-db.getsnpC:
+		lsp, ok := db.db[*in.lspid]
+		if !ok {
+			in.result <- false
 			break
 		}
+		lsp.getUpdLifetime()
+		copy(in.ent, lsp.hdr[clns.HdrLSPLifetime:clns.HdrLSPFlags])
+		in.result <- true
 
-		db.initiatePurgeLSP(lsp)
+	case in := <-db.getlspC:
+		lsp, ok := db.db[*in.lspid]
+		if !ok {
+			in.result <- 0
+			break
+		}
+		lsp.getUpdLifetime()
+		in.result <- copy(in.payload, lsp.payload)
+
 	}
 }
 

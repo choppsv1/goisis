@@ -17,11 +17,17 @@ cat > /etc/quagga/isisd.conf <<EOIF
       ip router isis ring
       isis hello-interval 10
       isis csnp-interval 10
+    interface eth2
+      ip router isis ring
     interface lo
     router isis ring
       net 00.0000.0000.0010.00
       metric-style wide
       is-type level-1
+
+      lsp-gen-interval 10
+      max-lsp-lifetime 360
+      lsp-refresh-interval 350
     line vty
 EOIF
 
