@@ -6,7 +6,7 @@ import (
 )
 
 // DbgFlags are flags for enabling debug output
-type DbgFlags int
+type DbgFlags uint
 
 // -----------
 // Debug flags
@@ -18,6 +18,14 @@ const (
 	DbgFUpd
 	DbgFFlags
 )
+
+var FlagNames = map[string]DbgFlags{
+	"packet": DbgFPkt,
+	"adj":    DbgFAdj,
+	"dis":    DbgFDIS,
+	"update": DbgFUpd,
+	"flags":  DbgFFlags,
+}
 
 var dlogger = log.New(os.Stderr, "DEBUG:", log.Ldate|log.Ltime|log.Lmicroseconds)
 var logger = log.New(os.Stderr, "INFO", log.Ldate|log.Ltime|log.Lmicroseconds)

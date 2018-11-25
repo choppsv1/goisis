@@ -284,11 +284,13 @@ func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) {
 
 // SetFlag sets the given flag for the given LSPID for the given level (li)
 func (c *CircuitLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
+	debug(DbgFFlags, "FLAG: Set %s %s %s for %s", flag, *lspid, li.ToLevel(), c)
 	c.levlink[li].SetFlag(flag, lspid)
 }
 
 // ClearFlag sets the given flag for the given LSPID for the given level (li)
 func (c *CircuitLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
+	debug(DbgFFlags, "FLAG: Clear %s %s %s for %s", flag, *lspid, li.ToLevel(), c)
 	c.levlink[li].ClearFlag(flag, lspid)
 }
 

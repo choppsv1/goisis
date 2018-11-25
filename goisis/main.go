@@ -37,9 +37,11 @@ func main() {
 	// XXX need to check for debug flags
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
+	areaIDPtr := flag.String("area", "00", "area of this instance")
+	dbgIDPtr := flag.String("debug", "",
+		"strsep list of debug flags: adj,dis,flags,packet,update")
 	isTypePtr := flag.String("istype", "l-1", "l-1, l-1-2, l-2-only")
 	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
-	areaIDPtr := flag.String("area", "00", "area of this instance")
 	flag.Parse()
 
 	if *playPtr {
@@ -47,8 +49,15 @@ func main() {
 		return
 	}
 
-	// Initialize Debug
-	GlbDebug = DbgFPkt | DbgFAdj | DbgFDIS | DbgFUpd
+	// Initialize debug flags.
+	for _, fstr := range strings.Split(*dbgIDPtr, ",") {
+		flag, ok := FlagNames[fstr]
+		if !ok {
+			fmt.Printf("Unknown debug flag: %s\n", fstr)
+			continue
+		}
+		GlbDebug |= flag
+	}
 
 	// Initialize instance type
 	switch *isTypePtr {
