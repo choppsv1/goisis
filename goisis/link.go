@@ -30,9 +30,6 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 // Link represents level dependent operations on a circuit.
 //
 type Link interface {
-	ClearFlag(update.SxxFlag, *clns.LSPID)
-	ClearFlagLocked(update.SxxFlag, *clns.LSPID)
-	SetFlag(update.SxxFlag, *clns.LSPID)
 	IsP2P() bool
 
 	DISInfoChanged()
@@ -297,27 +294,27 @@ func (link *LinkLAN) disElect() {
 // --------
 
 // ClearFlag clears a flag for lspid on link.
-func (link *LinkLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID) {
+func (link *LinkLAN) clearFlag(flag update.SxxFlag, lspid *clns.LSPID) {
 	link.flagCond.L.Lock()
-	link.ClearFlagLocked(flag, lspid)
+	link.clearFlagLocked(flag, lspid)
 	link.flagCond.L.Unlock()
 }
 
 // ClearFlagLocked clears a flag for lspid on link without locking
-func (link *LinkLAN) ClearFlagLocked(flag update.SxxFlag, lspid *clns.LSPID) {
+func (link *LinkLAN) clearFlagLocked(flag update.SxxFlag, lspid *clns.LSPID) {
 	link.flags[flag].Remove(lspid)
 	if (GlbDebug & DbgFFlags) != 0 {
-		debug(DbgFFlags, "Clear %s on %s for %s", flag, link, lspid)
+		debug(DbgFFlags, "LinkLAN Clear %s on %s for %s", flag, link, lspid)
 	}
 }
 
 // SetFlag sets a flag for lspid on link and schedules a send
-func (link *LinkLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID) {
+func (link *LinkLAN) setFlag(flag update.SxxFlag, lspid *clns.LSPID) {
 	link.flagCond.L.Lock()
 	defer link.flagCond.L.Unlock()
 	link.flags[flag].Add(lspid)
 	if (GlbDebug & DbgFFlags) != 0 {
-		debug(DbgFFlags, "Set %s on %s for %s", flag, link, lspid)
+		debug(DbgFFlags, "LinkLAN Set %s on %s for %s", flag, link, lspid)
 	}
 	link.flagCond.Signal()
 }
@@ -354,9 +351,8 @@ func (link *LinkLAN) _processFlags() {
 		}
 		// Clear the flag when the send is eminent, doesn't have to
 		// happen now though.
-		link.ClearFlagLocked(SRM, &lspid)
-		CloseFrame(etherp, l)
-		lspf = etherp
+		link.clearFlagLocked(SRM, &lspid)
+		lspf = CloseFrame(etherp, l)
 		break
 	}
 
@@ -409,7 +405,7 @@ func (link *LinkLAN) fillSNPLocked(tlvp tlv.Data) tlv.Data {
 		}
 		// XXX maybe it's a bug if this fails?
 		if ok := link.lspdb.CopyLSPSNP(&lspid, p); ok {
-			link.ClearFlagLocked(SSN, &lspid)
+			link.clearFlagLocked(SSN, &lspid)
 		} else {
 			logger.Panicf("Got LSP SSN with no LSP for %s", lspid)
 		}

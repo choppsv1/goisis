@@ -24,7 +24,7 @@ func NewCircuitDB() *CircuitDB {
 		snppkts:  make(chan *RecvPDU),
 	}
 
-	go cdb.processFlags()
+	go cdb.processChgFlags()
 
 	return cdb
 }
@@ -45,52 +45,36 @@ func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*upda
 	return cll, err
 }
 
-// // SetAllFlag sets the given flag for the given LSPID on all circuits except 'not'
-// func (cdb *CircuitDB) SetAllFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex, not Circuit) {
-// 	for _, c := range cdb.circuits {
-// 		if c == not {
-// 			continue
-// 		}
-// 		c.SetFlag(flag, lspid, li)
-// 	}
-// }
-
-// // ClearAllFlag clears the given flag for the given LSPID on all circuits except 'not'
-// func (cdb *CircuitDB) ClearAllFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex, not Circuit) {
-// 	for _, c := range cdb.circuits {
-// 		if c == not {
-// 			continue
-// 		}
-// 		c.ClearFlag(flag, lspid, li)
-// 	}
-// }
-
-func (cdb *CircuitDB) processFlag(cf *update.ChgSxxFlag) {
-	if !cf.All {
-		panic("Invalid non-all sent to circuitDB")
-	}
+func (cdb *CircuitDB) processChgFlag(cf *update.ChgSxxFlag) {
 	cfc := cf.C.(Circuit)
 	if cf.Set {
+		if !cf.All {
+			cfc.SetFlag(cf.Flag, &cf.Lspid, cf.Li)
+			return
+		}
 		for _, c := range cdb.circuits {
 			if c != cfc {
 				c.SetFlag(cf.Flag, &cf.Lspid, cf.Li)
 			}
 		}
 	} else {
+		if !cf.All {
+			cfc.ClearFlag(cf.Flag, &cf.Lspid, cf.Li)
+			return
+		}
 		for _, c := range cdb.circuits {
 			if c != cfc {
 				c.ClearFlag(cf.Flag, &cf.Lspid, cf.Li)
-				continue
 			}
 		}
 	}
 }
 
-func (cdb *CircuitDB) processFlags() {
+func (cdb *CircuitDB) processChgFlags() {
 	for {
 		select {
 		case cf := <-cdb.flagsC:
-			cdb.processFlag(&cf)
+			cdb.processChgFlag(&cf)
 		}
 	}
 }

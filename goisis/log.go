@@ -26,6 +26,13 @@ var FlagNames = map[string]DbgFlags{
 	"update": DbgFUpd,
 	"flags":  DbgFFlags,
 }
+var FlagTags = map[DbgFlags]string{
+	DbgFPkt:   "PACKET: ",
+	DbgFAdj:   "ADJ: ",
+	DbgFDIS:   "DIS: ",
+	DbgFUpd:   "UPDATE: ",
+	DbgFFlags: "FLAGS: ",
+}
 
 var dlogger = log.New(os.Stderr, "DEBUG:", log.Ldate|log.Ltime|log.Lmicroseconds)
 var logger = log.New(os.Stderr, "INFO", log.Ldate|log.Ltime|log.Lmicroseconds)
@@ -36,7 +43,7 @@ func debugIsSet(flag DbgFlags) bool {
 
 func debug(flag DbgFlags, format string, a ...interface{}) {
 	if (flag & GlbDebug) != 0 {
-		dlogger.Printf(format, a...)
+		dlogger.Printf(FlagTags[flag]+format, a...)
 	}
 }
 

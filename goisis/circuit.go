@@ -231,9 +231,13 @@ func NewCircuitLAN(cb *CircuitBase, lf clns.LevelFlag) (*CircuitLAN, error) {
 // OpenFrame returns a full sized ethernet frame with the headers
 // semi-initialized, a call to CloseFrame completes the initialization.
 func (c *CircuitLAN) OpenFrame(dst net.HardwareAddr) (ether.Frame, []byte) {
-	etherp := make([]byte, c.intf.MTU+14)
+	etherb := make([]byte, c.intf.MTU+14)
+	etherp := ether.Frame(etherb)
 	copy(etherp[ether.HdrEthDest:], dst)
 	copy(etherp[ether.HdrEthSrc:], c.intf.HardwareAddr)
+
+	debug(DbgFPkt, "OpenFrame dst: %s, src: %s\n",
+		etherp.GetDst(), etherp.GetSrc(), etherp.GetTypeLen())
 
 	llcp := etherp[ether.HdrEthSize:]
 	copy(llcp, llcTemplate)
@@ -243,8 +247,12 @@ func (c *CircuitLAN) OpenFrame(dst net.HardwareAddr) (ether.Frame, []byte) {
 }
 
 // CloseFrame closes the ethernet frame (sets the len value).
-func CloseFrame(etherp ether.Frame, len int) {
+func CloseFrame(etherp ether.Frame, len int) ether.Frame {
 	etherp.SetTypeLen(len + ether.HdrLLCSize)
+	etherp = etherp[:ether.HdrEthSize+ether.HdrLLCSize+len]
+	debug(DbgFPkt, "CloseFrame dst: %s, src: %s framelen %d\n",
+		etherp.GetDst(), etherp.GetSrc(), etherp.GetTypeLen())
+	return etherp
 }
 
 //
@@ -284,14 +292,14 @@ func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) {
 
 // SetFlag sets the given flag for the given LSPID for the given level (li)
 func (c *CircuitLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
-	debug(DbgFFlags, "FLAG: Set %s %s %s for %s", flag, *lspid, li.ToLevel(), c)
-	c.levlink[li].SetFlag(flag, lspid)
+	debug(DbgFFlags, "CircuitLAN: Set %s %s %s for %s", flag, *lspid, li.ToLevel(), c)
+	c.levlink[li].setFlag(flag, lspid)
 }
 
 // ClearFlag sets the given flag for the given LSPID for the given level (li)
 func (c *CircuitLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
-	debug(DbgFFlags, "FLAG: Clear %s %s %s for %s", flag, *lspid, li.ToLevel(), c)
-	c.levlink[li].ClearFlag(flag, lspid)
+	debug(DbgFFlags, "CircuitLAN: Clear %s %s %s for %s", flag, *lspid, li.ToLevel(), c)
+	c.levlink[li].clearFlag(flag, lspid)
 }
 
 func (c *CircuitLAN) IsP2P() bool {

@@ -16,8 +16,6 @@ import (
 
 // Circuit is the interface that update requires for circuits.
 type Circuit interface {
-	ClearFlag(flag SxxFlag, lspid *clns.LSPID, li clns.LIndex)
-	SetFlag(flag SxxFlag, lspid *clns.LSPID, li clns.LIndex)
 	IsP2P() bool
 }
 
@@ -246,12 +244,12 @@ func (db *DB) clearAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
 
 // SetFlag sets flag for LSPID on circuit for the updb level.
 func (db *DB) setFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
-	c.SetFlag(flag, lspid, db.li)
+	db.flagsC <- ChgSxxFlag{flag, db.li, true, false, c, *lspid}
 }
 
 // ClearFlag clears flag for LSPID on circuit for the updb level.
 func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
-	c.ClearFlag(flag, lspid, db.li)
+	db.flagsC <- ChgSxxFlag{flag, db.li, false, false, c, *lspid}
 }
 
 // newLSPSegment creates a new lspSegment struct
