@@ -8,12 +8,8 @@ import (
 	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/goisis/update"
 	"github.com/choppsv1/goisis/tlv"
-	"sync"
 	"time"
 )
-
-var SRM = update.SRM
-var SSN = update.SSN
 
 // =======
 // Globals
@@ -30,12 +26,11 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 // Link represents level dependent operations on a circuit.
 //
 type Link interface {
-	IsP2P() bool
-
+	ClearFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
 	DISInfoChanged()
-
+	IsP2P() bool
 	ProcessSNP(*RecvPDU) error
-
+	SetFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
 	UpdateAdj(*RecvPDU) error
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
 }
@@ -54,6 +49,12 @@ const (
 // SendLSP is the value passed on the sendLSP channel
 type SendLSP struct {
 	li    clns.LIndex
+	lspid clns.LSPID
+}
+
+type ChgSxxFlag struct {
+	set   bool // set or clear
+	flag  update.SxxFlag
 	lspid clns.LSPID
 }
 
@@ -81,10 +82,9 @@ type LinkLAN struct {
 	disElected     bool
 
 	// Update Process
-	lspdb    *update.DB
-	flags    [2]update.FlagSet
-	flagLock sync.Mutex
-	flagCond *sync.Cond
+	lspdb  *update.DB
+	flagsC chan ChgSxxFlag
+	flags  [2]update.FlagSet
 }
 
 func (e DISEvent) String() string {
@@ -113,7 +113,6 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 		holdMult:       clns.DefHelloMult,
 		disInfoChanged: make(chan DISEvent),
 	}
-	link.flagCond = sync.NewCond(&link.flagLock)
 	link.adjdb = NewAdjDB(link, link.li)
 	link.lspdb = c.updb[li]
 	link.flags[0] = make(update.FlagSet)
@@ -141,6 +140,10 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 	go link.processFlags()
 
 	return link
+}
+
+func (link *LinkLAN) IsP2P() bool {
+	return false
 }
 
 // -------------------
@@ -293,104 +296,55 @@ func (link *LinkLAN) disElect() {
 // Flooding
 // --------
 
-// ClearFlag clears a flag for lspid on link.
-func (link *LinkLAN) clearFlag(flag update.SxxFlag, lspid *clns.LSPID) {
-	link.flagCond.L.Lock()
-	link.clearFlagLocked(flag, lspid)
-	link.flagCond.L.Unlock()
-}
+var SRM = update.SRM
+var SSN = update.SSN
 
-// ClearFlagLocked clears a flag for lspid on link without locking
-func (link *LinkLAN) clearFlagLocked(flag update.SxxFlag, lspid *clns.LSPID) {
-	link.flags[flag].Remove(lspid)
-	if (GlbDebug & DbgFFlags) != 0 {
-		debug(DbgFFlags, "LinkLAN Clear %s on %s for %s", flag, link, lspid)
+// ClearFlag clears a flag for lspid on link.
+func (link *LinkLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID) {
+	link.flagsC <- ChgSxxFlag{
+		set:   false,
+		flag:  flag,
+		lspid: *lspid,
 	}
 }
 
 // SetFlag sets a flag for lspid on link and schedules a send
-func (link *LinkLAN) setFlag(flag update.SxxFlag, lspid *clns.LSPID) {
-	link.flagCond.L.Lock()
-	defer link.flagCond.L.Unlock()
-	link.flags[flag].Add(lspid)
-	if (GlbDebug & DbgFFlags) != 0 {
-		debug(DbgFFlags, "LinkLAN Set %s on %s for %s", flag, link, lspid)
-	}
-	link.flagCond.Signal()
-}
-
-// _processFlags is the guts of the sendLSP function
-// Replace this with use of channels and no locking.
-func (link *LinkLAN) _processFlags() {
-	link.flagCond.L.Lock()
-	llen := len(link.flags[SRM])
-	plen := len(link.flags[SSN])
-	debug(DbgFFlags, "LSP flags on %s, llen %d plen %d", link, llen, plen)
-	for llen+plen == 0 {
-		debug(DbgFFlags, "Waiting for LSP flags on %s", link)
-		link.flagCond.Wait()
-		llen = len(link.flags[SRM])
-		plen = len(link.flags[SSN])
-		debug(DbgFFlags, "Wakeup for LSP flags on %s, llen %d plen %d", link, llen, plen)
-	}
-
-	// ---------------------------------
-	// Locked - Process 1 LSP and 1 PSNP
-	// ---------------------------------
-
-	//
-	// Get an LSP PDU
-	//
-	var lspf ether.Frame
-	// Only process one LSP per lock
-	for lspid := range link.flags[SRM] {
-		var l int
-		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.li])
-		if l = link.lspdb.CopyLSPPayload(&lspid, payload); l == 0 {
-			break
-		}
-		// Clear the flag when the send is eminent, doesn't have to
-		// happen now though.
-		link.clearFlagLocked(SRM, &lspid)
-		lspf = CloseFrame(etherp, l)
-		break
-	}
-
-	//
-	// Get a PSNP PDU
-	//
-	var psnpf ether.Frame
-	if plen != 0 {
-		psnpf = link.getPSNPLocked()
-	}
-
-	link.flagCond.L.Unlock()
-
-	//
-	// Unlocked
-	//
-
-	// Send LSP
-	if lspf != nil {
-		link.circuit.outpkt <- lspf
-	}
-
-	// Send PSNP
-	if psnpf != nil {
-		link.circuit.outpkt <- psnpf
+func (link *LinkLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID) {
+	link.flagsC <- ChgSxxFlag{
+		set:   true,
+		flag:  flag,
+		lspid: *lspid,
 	}
 }
 
-// XXX this go rtn has no quit
-func (link *LinkLAN) processFlags() {
+func (link *LinkLAN) changeFlag(flag update.SxxFlag, set bool, lspid *clns.LSPID) {
+	if set {
+		link.flags[flag][*lspid] = struct{}{}
+	} else {
+		delete(link.flags[flag], *lspid)
+	}
+}
+
+func (link *LinkLAN) waitFlags() {
+	// XXX add a timer/ticker here to handle LSP flood pacing.
+	cf := <-link.flagsC
+	link.changeFlag(cf.flag, cf.set, &cf.lspid)
+}
+
+func (link *LinkLAN) gatherFlags() {
 	for {
-		link._processFlags()
+		select {
+		case cf := <-link.flagsC:
+			link.changeFlag(cf.flag, cf.set, &cf.lspid)
+		default:
+			return
+
+		}
 	}
 }
 
-// fillSNPLocked is called to fill a SNP packet with SNPEntries the flagCond
-// Lock has is held.
-func (link *LinkLAN) fillSNPLocked(tlvp tlv.Data) tlv.Data {
+// fillSNP is called to fill a SNP packet with SNPEntries
+func (link *LinkLAN) fillSNP(tlvp tlv.Data) tlv.Data {
 	track, err := tlv.Open(tlvp, tlv.TypeSNPEntries, nil)
 	if err != nil {
 		panic("No TLV space with new PDU")
@@ -403,38 +357,60 @@ func (link *LinkLAN) fillSNPLocked(tlvp tlv.Data) tlv.Data {
 			_ = err.(tlv.ErrNoSpace)
 			break
 		}
-		// XXX maybe it's a bug if this fails?
 		if ok := link.lspdb.CopyLSPSNP(&lspid, p); ok {
-			link.clearFlagLocked(SSN, &lspid)
+			link.changeFlag(SSN, false, &lspid)
 		} else {
-			logger.Panicf("Got LSP SSN with no LSP for %s", lspid)
+			debug(DbgFFlags, "%s: LSP SSN with no LSP for %s", link, lspid)
 		}
 	}
 	return track.Close()
 }
 
-// getPSNPLocked is called to get one PSNP PDU worth of SNP based on SSN flags,
-// the flagCond Lock is held.
-func (link *LinkLAN) getPSNPLocked() ether.Frame {
+// send all PSNP we have queued up.
+func (link *LinkLAN) sendAllPSNP() {
 	var pdutype clns.PDUType
 	if link.li == 0 {
 		pdutype = clns.PDUTypePSNPL1
 	} else {
 		pdutype = clns.PDUTypePSNPL2
 	}
-	etherp, _, psnp, tlvp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.li])
 
-	// Fill fixed header values
-	copy(psnp[clns.HdrPSNPSrcID:], GlbSystemID)
+	// While we have SSN flags send PSNP
+	for len(link.flags[SSN]) != 0 {
+		etherp, _, psnp, tlvp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.li])
 
-	// Fill as many SNP entries as we can in one PDU
-	endp := link.fillSNPLocked(tlvp)
+		// Fill fixed header values
+		copy(psnp[clns.HdrPSNPSrcID:], GlbSystemID)
 
-	link.circuit.ClosePDU(etherp, endp)
+		// Fill as many SNP entries as we can in one PDU
+		endp := link.fillSNP(tlvp)
 
-	return etherp
+		// Send the PDU.
+		link.circuit.outpkt <- link.circuit.ClosePDU(etherp, endp)
+	}
 }
 
-func (link *LinkLAN) IsP2P() bool {
-	return false
+// send all LSP we have queued up.
+func (link *LinkLAN) sendAnLSP() {
+	for lspid := range link.flags[SRM] {
+		link.changeFlag(SRM, false, &lspid)
+		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.li])
+		if l := link.lspdb.CopyLSPPayload(&lspid, payload); l != 0 {
+			link.circuit.outpkt <- CloseFrame(etherp, l)
+			break
+		}
+		debug(DbgFFlags, "%s SRM set no LSP %s\n", link, lspid)
+	}
+}
+
+// processFlags is a go routine that sets/clears flags and floods.
+func (link *LinkLAN) processFlags() {
+	for {
+		link.waitFlags()
+		for len(link.flags[SRM]) != 0 || len(link.flags[SSN]) != 0 {
+			link.gatherFlags()
+			link.sendAllPSNP()
+			link.sendAnLSP()
+		}
+	}
 }

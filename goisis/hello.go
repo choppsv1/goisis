@@ -123,12 +123,8 @@ func sendLANHello(link *LinkLAN) error {
 		}
 	}
 
-	link.circuit.ClosePDU(etherp, endp)
-
-	// ---------------
 	// Send the packet
-	// ---------------
-	link.circuit.outpkt <- etherp
+	link.circuit.outpkt <- link.circuit.ClosePDU(etherp, endp)
 
 	return nil
 }

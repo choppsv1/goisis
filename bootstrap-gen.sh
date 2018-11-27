@@ -16,6 +16,7 @@ enable password lab
 EOF
 
     cat > /etc/quagga/isisd.conf <<EOIF
+hostname r${routerid}
 interface eth1
     ip router isis ring
 interface lo

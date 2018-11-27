@@ -51,7 +51,7 @@ var clnsTemplate = []uint8{
 type Circuit interface {
 	IsP2P() bool
 	ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex)
-	ClosePDU(ether.Frame, []byte)
+	ClosePDU(ether.Frame, []byte) ether.Frame
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
@@ -273,7 +273,7 @@ func (c *CircuitLAN) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.
 //
 // ClosePDU finalizes the PDU length fields given endp "pointer"
 //
-func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) {
+func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) ether.Frame {
 	ethlen := tlv.GetOffset([]byte(etherp), endp)
 	epayloadlen := ethlen - ether.HdrEthSize
 	pdutype := etherp[ether.HdrEthSize+ether.HdrLLCSize+clns.HdrCLNSPDUType]
@@ -288,18 +288,20 @@ func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) {
 
 	debug(DbgFPkt, "Closing PDU with pdulen %d payload %d framelen %d",
 		pdulen, epayloadlen, len(etherp))
+
+	return etherp
 }
 
 // SetFlag sets the given flag for the given LSPID for the given level (li)
 func (c *CircuitLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
-	debug(DbgFFlags, "CircuitLAN: Set %s %s %s for %s", flag, *lspid, li.ToLevel(), c)
-	c.levlink[li].setFlag(flag, lspid)
+	debug(DbgFFlags, "%s: Set %s %s %s", c, flag, *lspid, li.ToLevel())
+	c.levlink[li].SetFlag(flag, lspid)
 }
 
 // ClearFlag sets the given flag for the given LSPID for the given level (li)
 func (c *CircuitLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
-	debug(DbgFFlags, "CircuitLAN: Clear %s %s %s for %s", flag, *lspid, li.ToLevel(), c)
-	c.levlink[li].clearFlag(flag, lspid)
+	debug(DbgFFlags, "%s: Clear %s %s %s", c, flag, *lspid, li.ToLevel())
+	c.levlink[li].ClearFlag(flag, lspid)
 }
 
 func (c *CircuitLAN) IsP2P() bool {
