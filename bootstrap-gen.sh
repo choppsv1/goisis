@@ -22,6 +22,7 @@ interface lo
 router isis ring
     net 00.0000.0000.00${routerid}.00
     metric-style wide
+    is-type level-1
     lsp-gen-interval 10
     lsp-refresh-interval 60
     max-lsp-lifetime 360
