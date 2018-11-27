@@ -112,11 +112,13 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 		helloInt:       clns.DefHelloInt,
 		holdMult:       clns.DefHelloMult,
 		disInfoChanged: make(chan DISEvent),
+		flagsC:         make(chan ChgSxxFlag),
+		flags:          [2]update.FlagSet{make(update.FlagSet), make(update.FlagSet)},
 	}
 	link.adjdb = NewAdjDB(link, link.li)
 	link.lspdb = c.updb[li]
-	link.flags[0] = make(update.FlagSet)
-	link.flags[1] = make(update.FlagSet)
+	//link.flags[0] = make(update.FlagSet)
+	//link.flags[1] = make(update.FlagSet)
 
 	lanLinkCircuitIDs[li]++
 	link.lclCircID = lanLinkCircuitIDs[li]
@@ -319,16 +321,21 @@ func (link *LinkLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID) {
 
 func (link *LinkLAN) changeFlag(flag update.SxxFlag, set bool, lspid *clns.LSPID) {
 	if set {
+		debug(DbgFFlags, "%s: Real set of %s for %s", link, flag, *lspid)
 		link.flags[flag][*lspid] = struct{}{}
 	} else {
+		debug(DbgFFlags, "%s: Real clear of %s for %s", link, flag, *lspid)
 		delete(link.flags[flag], *lspid)
 	}
 }
 
 func (link *LinkLAN) waitFlags() {
 	// XXX add a timer/ticker here to handle LSP flood pacing.
-	cf := <-link.flagsC
-	link.changeFlag(cf.flag, cf.set, &cf.lspid)
+	debug(DbgFFlags, "%s: Waiting for flag changes", link)
+	select {
+	case cf := <-link.flagsC:
+		link.changeFlag(cf.flag, cf.set, &cf.lspid)
+	}
 }
 
 func (link *LinkLAN) gatherFlags() {
@@ -396,6 +403,7 @@ func (link *LinkLAN) sendAnLSP() {
 		link.changeFlag(SRM, false, &lspid)
 		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.li])
 		if l := link.lspdb.CopyLSPPayload(&lspid, payload); l != 0 {
+			debug(DbgFFlags, "%s SENDING LSP %s", link, lspid)
 			link.circuit.outpkt <- CloseFrame(etherp, l)
 			break
 		}
@@ -407,6 +415,7 @@ func (link *LinkLAN) sendAnLSP() {
 func (link *LinkLAN) processFlags() {
 	for {
 		link.waitFlags()
+		link.gatherFlags()
 		for len(link.flags[SRM]) != 0 || len(link.flags[SSN]) != 0 {
 			link.gatherFlags()
 			link.sendAllPSNP()
