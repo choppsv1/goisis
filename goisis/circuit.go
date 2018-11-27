@@ -55,6 +55,7 @@ type Circuit interface {
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
+	ProcessSNP(*RecvPDU)
 	SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex)
 }
 
@@ -92,8 +93,6 @@ type CircuitBase struct {
 	updb    [2]*update.DB
 	v4addrs []net.IPNet
 	v6addrs []net.IPNet
-	iihpkt  chan<- *RecvPDU
-	snppkt  chan<- *RecvPDU
 	outpkt  chan []byte
 	quit    <-chan bool
 }
@@ -112,8 +111,6 @@ func NewCircuitBase(ifname string, lf clns.LevelFlag, cdb *CircuitDB, updb [2]*u
 		lf:     lf,
 		cdb:    cdb,
 		updb:   updb,
-		iihpkt: cdb.iihpkts,
-		snppkt: cdb.snppkts,
 		outpkt: make(chan []byte),
 		quit:   quit,
 	}
@@ -179,7 +176,7 @@ func (c *CircuitLAN) getOurSNPA() net.HardwareAddr {
 }
 
 //
-// NewCircuitLAN creates a LAN circuit for a given IS-IS level.
+// NewCircuitLAN creates a single LAN circuit for all levels.
 //
 func NewCircuitLAN(cb *CircuitBase, lf clns.LevelFlag) (*CircuitLAN, error) {
 	var err error
@@ -306,4 +303,26 @@ func (c *CircuitLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.L
 
 func (c *CircuitLAN) IsP2P() bool {
 	return false
+}
+
+func (c *CircuitLAN) ProcessSNP(pdu *RecvPDU) {
+	// Validate ethernet values.
+	// var src, dst [clns.SNPALen]byte
+	// l, err := pdu.pdutype.GetPDULevel()
+	// if err != nil {
+	// 	return err
+	// }
+
+	switch pdu.pdutype {
+	case clns.PDUTypeCSNPL1:
+		debug(DbgFPkt, "INFO: ignoring CSNPL1 on %s for now", c)
+	case clns.PDUTypeCSNPL2:
+		debug(DbgFPkt, "INFO: ignoring CSNPL2 on %s for now", c)
+	case clns.PDUTypePSNPL1:
+		debug(DbgFPkt, "INFO: ignoring PSNPL1 on %s for now", c)
+	case clns.PDUTypePSNPL2:
+		debug(DbgFPkt, "INFO: ignoring PSNPL2 on %s for now", c)
+	default:
+		panic("Illegal PDU type")
+	}
 }

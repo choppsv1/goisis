@@ -6,6 +6,7 @@ import (
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
 	"strings"
+	"time"
 )
 
 //
@@ -120,7 +121,10 @@ func main() {
 		}
 	}
 
-	processPDUs(cdb)
+	ticker := time.NewTicker(time.Second * 10)
+	for _ = range ticker.C {
+		fmt.Printf("Keep Alive\n")
+	}
 
 	close(GlbQuit)
 }

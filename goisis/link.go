@@ -29,7 +29,6 @@ type Link interface {
 	ClearFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
 	DISInfoChanged()
 	IsP2P() bool
-	ProcessSNP(*RecvPDU) error
 	SetFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
 	UpdateAdj(*RecvPDU) error
 	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
@@ -83,6 +82,7 @@ type LinkLAN struct {
 
 	// Update Process
 	lspdb  *update.DB
+	snppkt chan<- *RecvPDU
 	flagsC chan ChgSxxFlag
 	flags  [2]update.FlagSet
 }
