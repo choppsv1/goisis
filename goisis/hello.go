@@ -3,7 +3,7 @@
 // Copyright (c) 2018, Christian Hopps
 // All Rights Reserved.
 //
-// Implement the IS-IS hello procotol
+// Implement the IS-IS hello process
 //
 package main
 
@@ -17,8 +17,8 @@ import (
 	"time"
 )
 
-// StartHelloProcess starts a go routine to send and receive hellos and possibly
-// elect DIS (on LAN)
+// StartHelloProcess starts a go routine to send and receive hellos, manage
+// adjacencies and elect DIS on LANs
 func StartHelloProcess(link *LinkLAN, interval uint, quit <-chan bool) {
 	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, interval)
 	ival := time.Second * time.Duration(interval)
@@ -26,7 +26,6 @@ func StartHelloProcess(link *LinkLAN, interval uint, quit <-chan bool) {
 	go helloProcess(ticker.C, link, quit)
 }
 
-// XXX rename Hello Process
 // sendLANHellos is a go routine that sends hellos based using a ticker
 // It also processes DIS update events.
 func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
@@ -44,10 +43,9 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 		case pdu := <-link.iihpkt:
 			rundis = pdu.link.RecvHello(pdu)
 		case srcid := <-link.expireC:
-			// Expire an adjancency.
 			a := link.srcidMap[srcid]
 			if a == nil {
-				debug(DbgFDIS, "Adj for %s on %s is gone.", srcid, link)
+				debug(DbgFDIS, "Adj for %s on %s is already gone.", srcid, link)
 				break
 			}
 			// If the adjacency was up then we need to rerun DIS election.
@@ -73,8 +71,11 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 	}
 }
 
+// hasUpAdj returns true if the DB contains any Up adjacencies
+// hasUpAdjSNPA returns true if the DB contains any Up adjacencies
+
 // getAdjSNPA returns an list of SNPA for all non-DOWN adjacencies
-func (link *LinkLAN) getAdjSNPA() []net.HardwareAddr {
+func (link *LinkLAN) getKnownSNPA() []net.HardwareAddr {
 	alist := make([]net.HardwareAddr, 0, len(link.srcidMap))
 	for _, a := range link.srcidMap {
 		if a.State != AdjStateDown {
@@ -142,7 +143,7 @@ func sendLANHello(link *LinkLAN) error {
 		}
 	}
 
-	endp, err = tlv.AddAdjSNPA(endp, link.getAdjSNPA())
+	endp, err = tlv.AddAdjSNPA(endp, link.getKnownSNPA())
 	if err != nil {
 		debug(DbgFPkt, "Error Adding SNPA: %s", err)
 		return err
