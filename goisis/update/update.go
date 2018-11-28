@@ -146,9 +146,9 @@ func NewDB(sysid []byte, l clns.Level, flagsC chan<- ChgSxxFlag, debug func(stri
 	return db
 }
 
-//
-// External API no locking required.
-//
+// ============
+// External API
+// ============
 
 // InputPDU creates or updates an LSP in the update DB after validity checks.
 func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) error {
@@ -193,6 +193,8 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 		}
 	}
 
+	// Finish the rest in our update process go routine (avoid locking)
+
 	db.debug("%s: Sending LSP from %s to Update Process", db, c)
 	db.pduC <- inputPDU{c, payload, pdutype, tlvs}
 	return nil
@@ -236,10 +238,9 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 	return found
 }
 
-//
-// Internal Functionality only called in the update go routine, no locking
-// required.
-//
+// ===========================================================
+// Internal Functionality only called in the update go routine
+// ===========================================================
 
 // String returns a string identifying the LSP DB lock must be held
 func (lsp *lspSegment) String() string {
@@ -611,6 +612,12 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 }
 
 func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVMap) {
+	// -------------------------------------------------------------
+	// ISO10589: 7.3.15.2 "Action on receipt of sequence numbers PDU
+	// -------------------------------------------------------------
+	// a.1-5 already done in receive 6 Check SNPA from an adj (use function)
+	// a.[78] check password/auth
+
 	var mentioned map[clns.LSPID]struct{}
 	if complete {
 		mentioned = make(map[clns.LSPID]struct{})

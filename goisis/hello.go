@@ -17,6 +17,66 @@ import (
 	"time"
 )
 
+// =========
+// Adjacency
+// =========
+
+//
+// AdjState represents the state of the IS-IS adjcency
+//
+type AdjState uint8
+
+//
+// AdjState constants for the state of the IS-IS adjcency
+//
+const (
+	AdjStateDown AdjState = iota
+	AdjStateInit
+	AdjStateUp
+)
+
+var stateStrings = map[AdjState]string{
+	AdjStateDown: "AdjStateUp",
+	AdjStateInit: "AdjStateInit",
+	AdjStateUp:   "AdjStateUp",
+}
+
+func (s AdjState) String() string {
+	ss, ok := stateStrings[s]
+	if !ok {
+		return fmt.Sprintf("Unknown AdjState(%d)", s)
+	}
+	return ss
+}
+
+//
+// Adj represents an IS-IS adjacency
+//
+type Adj struct {
+	// Immutable.
+	link  Link
+	lf    clns.LevelFlag //  need to change this to LevelFlag for p2p
+	sysid clns.SystemID
+	snpa  clns.SNPA // XXX need to conditionalize this for P2P.
+
+	// Mutable.
+	State     AdjState
+	areas     [][]byte
+	holdTimer *time.Timer
+
+	// LAN state
+	lanID    clns.NodeID
+	priority uint8
+}
+
+func (a *Adj) String() string {
+	return fmt.Sprintf("Adj(%s,%s,%s)", clns.ISOString(a.sysid[:], false), a.link, a.State)
+}
+
+// =============
+// Hello Process
+// =============
+
 // StartHelloProcess starts a go routine to send and receive hellos, manage
 // adjacencies and elect DIS on LANs
 func StartHelloProcess(link *LinkLAN, interval uint, quit <-chan bool) {
@@ -164,6 +224,89 @@ func sendLANHello(link *LinkLAN) error {
 	return nil
 }
 
+// Update updates the adjacency with the information from the IIH, returns true
+// if DIS election should be re-run.
+func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
+	rundis := false
+	iihp := pdu.payload[clns.HdrCLNSSize:]
+
+	if a.lf.IsLevelEnabled(1) {
+		// Update Areas
+		areas, err := pdu.tlvs[tlv.TypeAreaAddrs][0].AreaAddrsValue()
+		if err != nil {
+			logger.Printf("ERROR: processing Area Address TLV from %s: %s", a, err)
+			return true
+		}
+		a.areas = areas
+	}
+
+	if a.holdTimer != nil && !a.holdTimer.Stop() {
+		debug(DbgFAdj, "%s failed to stop hold timer in time, letting expire", a)
+		return false
+	}
+
+	oldstate := a.State
+	a.State = AdjStateInit
+
+	if a.link.IsP2P() {
+		// XXX writeme
+	} else {
+		iih := pdu.payload[clns.HdrCLNSSize:]
+		copy(a.lanID[:], iih[clns.HdrIIHLANLANID:])
+
+		ppri := iihp[clns.HdrIIHLANPriority]
+		if ppri != a.priority {
+			a.priority = ppri
+			rundis = true
+		}
+
+		ourSNPA := a.link.GetOurSNPA()
+	forloop:
+		// Walk neighbor TLVs if we see ourselves mark adjacency Up.
+		for _, ntlv := range pdu.tlvs[tlv.TypeISNeighbors] {
+			addrs, err := ntlv.ISNeighborsValue()
+			if err != nil {
+				logger.Printf("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
+				break
+			}
+			for _, snpa := range addrs {
+				if bytes.Equal(snpa, ourSNPA) {
+					a.State = AdjStateUp
+					break forloop
+				}
+			}
+		}
+	}
+
+	if a.State != oldstate {
+		if a.State == AdjStateUp {
+			rundis = true
+			logger.Printf("TRAP: AdjacencyStateChange: Up: %s", a)
+		} else if oldstate == AdjStateUp {
+			rundis = true
+			logger.Printf("TRAP: AdjacencyStateChange: Down: %s", a)
+		}
+		debug(DbgFAdj, "New state %s for %s", a.State, a)
+	}
+
+	// Restart the hold timer.
+	holdtime := pkt.GetUInt16(iihp[clns.HdrIIHHoldTime:])
+	if a.holdTimer == nil {
+		a.holdTimer = time.AfterFunc(time.Second*time.Duration(holdtime),
+			func() {
+				sysid := a.sysid
+				a.link.ExpireAdj(sysid)
+			})
+	} else {
+		a.holdTimer.Reset(time.Second * time.Duration(holdtime))
+	}
+
+	debug(DbgFAdj, "%s: Updated adjacency %s for SNPA %s from %s to %s rundis %v",
+		a.link, a.sysid, a.snpa, oldstate, a.State, rundis)
+
+	return rundis
+}
+
 // ErrIIH is a general error in IIH packet processing
 type ErrIIH string
 
@@ -186,6 +329,8 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 
 	// For level 1 we must be in the same area.
 	if pdu.l == 1 {
+		// ISO10589 8.4.2.2: Receipt of level 1 IIH PDUs
+
 		// Expect 1 and only 1 Area TLV
 		atlv := tlvs[tlv.TypeAreaAddrs]
 		if len(atlv) != 1 {
@@ -198,6 +343,7 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 			return rundis
 		}
 
+		// ISO10589 8.4.2.2.a: Look for our area in TLV.
 		matched := false
 		for _, addr := range addrs {
 			if bytes.Equal(GlbAreaID, addr) {
@@ -214,54 +360,31 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 	// ----------------
 	// Update Adjacency
 	// ----------------
-	debug(DbgFAdj, "%s: Updating adjacency for %s", link, pdu.src)
 
-	var snpa [clns.SNPALen]byte
-	copy(snpa[:], pdu.src)
-
-	var srcid [clns.SysIDLen]byte
-	off := clns.HdrCLNSSize + clns.HdrIIHLANSrcID
-	copy(srcid[:], pdu.payload[off:off+clns.SysIDLen])
-
-	a, ok := link.snpaMap[snpa]
+	a, ok := link.snpaMap[clns.HWToSNPA(pdu.src)]
 	if !ok {
-		// Create new adjacency
-		a := NewAdj(link, snpa, srcid, pdu.payload, pdu.tlvs)
-		link.snpaMap[snpa] = a
-		link.srcidMap[srcid] = a
-		// If the adjacency state is Up then we want to rerun DIS election
-		rundis = a.State == AdjStateUp
-	} else if a.sysid != srcid {
+		a = &Adj{
+			link:  pdu.link,
+			lf:    pdu.l.ToFlag(),
+			sysid: clns.GetSrcID(pdu.payload),
+			snpa:  clns.HWToSNPA(pdu.src),
+		}
+		link.snpaMap[a.snpa] = a
+		link.srcidMap[a.sysid] = a
+	}
+
+	srcid := clns.GetSrcID(pdu.payload)
+	// ISO10589 8.4.2.4: Make sure snpa, srcid and nbrSysType same
+	// XXX the standard is fuzzy here, is nbrSysType supposed to
+	// trace CircType from the IIH or the value it talks about just
+	// above which is based on the IIH level.
+	if a.sysid != srcid {
 		// If the system ID changed ignore and let timeout.
 		rundis = false
 	} else {
-		rundis = a.Update(pdu.payload, pdu.tlvs)
+		rundis = a.UpdateAdj(pdu)
 	}
 	return rundis
-}
-
-//
-// UpdateAdjState updates the adj state according to the TLV found in the IIH
-//
-func (link *LinkLAN) IsAdjStateUP(a *Adj, tlvs map[tlv.Type][]tlv.Data) error {
-	// Walk neighbor TLVs if we see ourselves mark adjacency Up.
-	for _, ntlv := range tlvs[tlv.TypeISNeighbors] {
-		addrs, err := ntlv.ISNeighborsValue()
-		if err != nil {
-			logger.Printf("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
-			return err
-		}
-		for _, snpa := range addrs {
-			if bytes.Equal(snpa, link.circuit.getOurSNPA()) {
-				a.State = AdjStateUp
-				break
-			}
-		}
-		if a.State == AdjStateUp {
-			break
-		}
-	}
-	return nil
 }
 
 // ------------

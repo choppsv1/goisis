@@ -7,11 +7,12 @@ package main
 import (
 	"fmt"
 	// "github.com/choppsv1/goisis/raw"
+	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/tlv"
 	"reflect"
 	"sync"
 	"time"
-	// "unsafe"
+	"unsafe"
 )
 
 type addr []byte
@@ -31,12 +32,12 @@ func (mi myint) gofunc(wg *sync.WaitGroup) {
 }
 
 func playground() {
-	var tlvArray = []byte{1, 1, 0xff}
-	var tlvData = tlv.Data(tlvArray[:])
-	var tlvBData = []byte(tlvData)
-	var ab = make([]byte, 6)
-	var a addr = ab
-	m := make(map[int]int)
+
+	mac1 := clns.HWToSNPA(clns.AllL1IS)
+	fmt.Printf("MAC %v\n", mac1)
+
+	// mac2 := clns.HWAddr(clns.AllL1IS).ToSNPA()
+	// fmt.Printf("MAC %v\n", mac2)
 
 	// var snpe tlv.SNPEntry
 	// fmt.Printf("OffsetOf Lifetime: %u\n", unsafe.Offsetof(snpe.Lifetime))
@@ -50,17 +51,27 @@ func playground() {
 	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
 	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
 
+	m := make(map[int]int)
 	v := m[0]
 	fmt.Printf("val: %d\n", v)
 
-	// arr := [3]int{0, 1, 2}
-	// aslice := arr[:]
-	// var arrp *[3]int
-	// arrp = aslice
+	arr := [3]int{0, 1, 2}
+	aslice := arr[:]
+	fmt.Printf("typeof aslice %v\n", reflect.TypeOf(aslice))
+	var arrp *[3]int
+	arrp = &arr
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&aslice))
+	arrp = (*[3]int)(unsafe.Pointer(hdr.Data))
+	fmt.Printf("arrp %v\n", arrp)
 
 	// ip, net := raw.GetInterfacePrefix("vboxnet3")
 	// fmt.Printf("interface addr: %s net: %s\n", ip, net)
 
+	var tlvArray = []byte{1, 1, 0xff}
+	var tlvData = tlv.Data(tlvArray[:])
+	var tlvBData = []byte(tlvData)
+	var ab = make([]byte, 6)
+	var a addr = ab
 	tlv.TLV.Type(tlvData)
 	fmt.Printf("tlvArray type: %s\n", reflect.TypeOf(tlvArray).String())
 	fmt.Printf("tlvData type: %s\n", reflect.TypeOf(tlvData).String())

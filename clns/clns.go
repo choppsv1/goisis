@@ -302,6 +302,20 @@ var PDULenOffMap = map[PDUType]int{
 }
 
 //
+// SrcIDOffMap provides the offset in the Ethernet payload of the SrcID
+// field.
+//
+var SrcIDOffMap = map[PDUType]uint{
+	PDUTypeIIHLANL1: HdrCLNSSize + HdrIIHSrcID,
+	PDUTypeIIHLANL2: HdrCLNSSize + HdrIIHSrcID,
+	PDUTypeIIHP2P:   HdrCLNSSize + HdrIIHSrcID,
+	PDUTypeCSNPL1:   HdrCLNSSize + HdrCSNPSrcID,
+	PDUTypeCSNPL2:   HdrCLNSSize + HdrCSNPSrcID,
+	PDUTypePSNPL1:   HdrCLNSSize + HdrPSNPSrcID,
+	PDUTypePSNPL2:   HdrCLNSSize + HdrPSNPSrcID,
+}
+
+//
 // PDUTLVOffMap maps PDU type to the offset in the payload of the TLV data
 //
 var PDUTLVOffMap = map[PDUType]int{
@@ -349,11 +363,25 @@ func (s SNPA) String() string {
 	return net.HardwareAddr(s[:]).String()
 }
 
+func HWToSNPA(h net.HardwareAddr) (snpa SNPA) {
+	copy(snpa[:], h)
+	return
+}
+
 // SystemID is a 6 octet system identifier all IS have uniq system IDs
 type SystemID [SysIDLen]byte
 
 func (s SystemID) String() string {
 	return ISOString(s[:], false)
+}
+
+func GetSrcID(payload []byte) (sysid SystemID) {
+	off, ok := SrcIDOffMap[getPDUType(payload)]
+	if !ok {
+		panic("Invalid payload to GetSrcID")
+	}
+	copy(sysid[:], payload[off:])
+	return
 }
 
 // NodeID identifies a node in the network graph. It is comprised of a system ID
