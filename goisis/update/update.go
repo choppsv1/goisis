@@ -28,7 +28,7 @@ type DB struct {
 	sysid   clns.SystemID
 	dis     [256]Trit
 	disC    chan chgDIS
-	lspC    chan inputPDU
+	pduC    chan inputPDU
 	flagsC  chan<- ChgSxxFlag
 	getlspC chan inputGetLSP
 	getsnpC chan inputGetSNP
@@ -36,6 +36,10 @@ type DB struct {
 	li      clns.LIndex
 	db      map[clns.LSPID]*lspSegment
 	debug   func(string, ...interface{})
+}
+
+func (db *DB) String() string {
+	return fmt.Sprintf("UpdateDB(%s)", db.li)
 }
 
 type chgDIS struct {
@@ -99,7 +103,6 @@ type lspSegment struct {
 	hdr      []byte
 	tlvs     map[tlv.Type][]tlv.Data
 	lspid    clns.LSPID
-	li       clns.LIndex
 	life     *xtime.HoldTimer
 	zeroLife *xtime.HoldTimer
 	isAck    bool
@@ -127,13 +130,12 @@ func (result lspCompareResult) String() string {
 
 // NewDB returns a new Update Process LSP database
 func NewDB(sysid []byte, l clns.Level, flagsC chan<- ChgSxxFlag, debug func(string, ...interface{})) *DB {
-	fmt.Printf("UPD: debug: %p", debug)
 	db := &DB{
 		debug:   debug,
 		li:      l.ToIndex(),
 		flagsC:  flagsC,
 		db:      make(map[clns.LSPID]*lspSegment),
-		lspC:    make(chan inputPDU),
+		pduC:    make(chan inputPDU),
 		getlspC: make(chan inputGetLSP),
 		getsnpC: make(chan inputGetSNP),
 		expireC: make(chan clns.LSPID),
@@ -152,10 +154,12 @@ func NewDB(sysid []byte, l clns.Level, flagsC chan<- ChgSxxFlag, debug func(stri
 func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) error {
 
 	// ------------------------------------------------------------
-	// ISO10589: 7.3.15.1 "Action on receipt of a link state PDU"
+	// ISO10589: 7.3.15.1.a "Action on receipt of a link state PDU"
 	// ------------------------------------------------------------
 
-	// 1-6 already done in receive
+	// 1-5 already done in receive
+	// 6 Check SNPA from an adj (use function)
+	// 7/8 check password/auth
 
 	// Check the length
 	if len(payload) > clns.LSPOrigBufSize {
@@ -189,7 +193,22 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 		}
 	}
 
-	db.lspC <- inputPDU{c, payload, pdutype, tlvs}
+	db.debug("%s: Sending LSP from %s to Update Process", db, c)
+	db.pduC <- inputPDU{c, payload, pdutype, tlvs}
+	return nil
+}
+
+// InputPDU creates or updates an LSP in the update DB after validity checks.
+func (db *DB) InputSNP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) error {
+
+	// -------------------------------------------------------------
+	// ISO10589: 7.3.15.2 "Action on receipt of sequence numbers PDU
+	// -------------------------------------------------------------
+	// a.1-5 already done in receive 6 Check SNPA from an adj (use function)
+	// a.[78] check password/auth
+
+	db.debug("%s: Sending SNP from %s to Update Process", db, c)
+	db.pduC <- inputPDU{c, payload, pdutype, tlvs}
 	return nil
 }
 
@@ -225,7 +244,7 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 // String returns a string identifying the LSP DB lock must be held
 func (lsp *lspSegment) String() string {
 	s := clns.ISOString(lsp.getLSPID(), false)
-	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v cksum:%#04x",
+	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v cksum:%#04x)",
 		s,
 		lsp.getSeqNo(),
 		lsp.getUpdLifetime(),
@@ -253,13 +272,12 @@ func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
 }
 
 // newLSPSegment creates a new lspSegment struct
-func (db *DB) newLSPSegment(payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) *lspSegment {
+func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSegment {
 	hdr := payload[clns.HdrCLNSSize:]
 	hdr = hdr[:clns.HdrLSPSize]
 	lsp := &lspSegment{
 		payload: payload,
 		hdr:     hdr,
-		li:      pdutype.GetPDULIndex(),
 		tlvs:    tlvs,
 	}
 	copy(lsp.lspid[:], hdr[clns.HdrLSPLSPID:])
@@ -274,7 +292,27 @@ func (db *DB) newLSPSegment(payload []byte, pdutype clns.PDUType, tlvs map[tlv.T
 	//      lsp.refreshTimer = time.NewTimer(lsp.lifetime.Remainingg())
 	// }
 
-	db.debug("New LSP: %s", lsp)
+	db.db[lsp.lspid] = lsp
+
+	db.debug("%s: New LSP: %s", db, lsp)
+	return lsp
+}
+
+// newLSPSegment creates a new lspSegment struct
+func (db *DB) newZeroLSPSegment(lifetime uint16, lspid *clns.LSPID, cksum uint16) *lspSegment {
+	lsp := &lspSegment{
+		hdr: make([]byte, clns.HdrLSPSize),
+	}
+	lsp.lspid = *lspid
+	copy(lsp.hdr[clns.HdrLSPLSPID:], lsp.lspid[:])
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], lifetime)
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], cksum)
+	lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
+	lsp.isOurs = bytes.Equal(lsp.lspid[:clns.SysIDLen], db.sysid[:])
+
+	db.db[lsp.lspid] = lsp
+
+	db.debug("%s: New Zero SeqNo LSP: %s", db, lsp)
 	return lsp
 }
 
@@ -315,18 +353,13 @@ func (lsp *lspSegment) getLSPID() []byte {
 	return lsp.hdr[clns.HdrLSPLSPID : clns.HdrLSPLSPID+clns.LSPIDLen]
 }
 
-func compareLSP(lsp *lspSegment, newhdr []byte) lspCompareResult {
-
-	// XXX this looks bogus.
-	if newhdr != nil && lsp == nil {
+// compareLSP we compare against either the LSP header + 2 or an SNPEntry.
+func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
+	if lsp == nil {
 		return NEWER
-	} else if newhdr == nil && lsp != nil {
-		return OLDER
-	} else if newhdr == nil && lsp == nil {
-		return SAME
 	}
 
-	nseqno := pkt.GetUInt32(newhdr[clns.HdrLSPSeqNo:])
+	nseqno := pkt.GetUInt32(e[tlv.SNPEntSeqNo:])
 	oseqno := lsp.getSeqNo()
 	if nseqno > oseqno {
 		return NEWER
@@ -334,7 +367,7 @@ func compareLSP(lsp *lspSegment, newhdr []byte) lspCompareResult {
 		return OLDER
 	}
 
-	nlifetime := pkt.GetUInt16(newhdr[clns.HdrLSPLifetime:])
+	nlifetime := pkt.GetUInt16(e[tlv.SNPEntLifetime:])
 	olifetime := lsp.getUpdLifetime()
 	if nlifetime == 0 && olifetime != 0 {
 		return NEWER
@@ -355,6 +388,8 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 	} else {
 		if !lsp.life.Stop() {
 			// Can't stop the timer we will be called again.
+			// XXX we are hitting this but then not purging!
+			db.debug("%s: Can't stop timer for %s let it happen", db, lsp)
 			return
 		}
 		// We hold on to LSPs that we force purge longer.
@@ -364,7 +399,7 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 
 	// Update the lifetime to zero if it wasn't already.
 	pkt.PutUInt16(lsp.hdr[:clns.HdrLSPLifetime], 0)
-	db.debug("Lifetime for %s expired, purging.", lsp)
+	db.debug("%s: Lifetime for %s expired, purging.", db, lsp)
 
 	if lsp.zeroLife != nil {
 		panic("Initiating a purge on a purged LSP")
@@ -388,7 +423,7 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 }
 
 // receiveLSP receives an LSP from flooding
-func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
+func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
 	var lspid clns.LSPID
 	copy(lspid[:], payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
 
@@ -397,7 +432,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs m
 	newhdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	nlifetime := pkt.GetUInt16(newhdr[clns.HdrLSPLifetime:])
 
-	result := compareLSP(lsp, newhdr)
+	result := compareLSP(lsp, newhdr[clns.HdrLSPLifetime:])
 	isOurs := bytes.Equal(lspid[:clns.SysIDLen], db.sysid[:])
 
 	// b) If the LSP has zero Remaining Lifetime, perform the actions
@@ -430,8 +465,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs m
 				}
 			} else {
 				// Create LSP and then force purge.
-				lsp := db.newLSPSegment(payload, pdutype, tlvs)
-				db.db[lspid] = lsp // XXX check if we can
+				lsp := db.newLSPSegment(payload, tlvs)
 				// consolidate or if we need to leave for acks
 				db.initiatePurgeLSP(lsp)
 				return
@@ -460,7 +494,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs m
 				// handled the event yet.  We need to recheck
 				// NEWER now, it will either remain NEWER or
 				// switch to SAME.
-				result = compareLSP(lsp, newhdr)
+				result = compareLSP(lsp, newhdr[clns.HdrLSPLifetime:])
 			} else {
 				// We've now stopped the timer we would have
 				// reset it anyway in updateLSPSegment.
@@ -471,17 +505,16 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs m
 
 	if result == NEWER {
 		if lsp != nil {
-			db.debug("Updating LSP from %s", c)
-			db.updateLSPSegment(lsp, payload, pdutype, tlvs)
+			db.debug("%s: Updating LSP from %s", db, c)
+			db.updateLSPSegment(lsp, payload, tlvs)
 		} else {
-			db.debug("Added LSP from %s", c)
+			db.debug("%s: Added LSP from %s", db, c)
 			if nlifetime == 0 {
 				// 17.3.16.4: a
 				// XXX send ack on circuit do not retain
 				return
 			}
-			lsp = db.newLSPSegment(payload, pdutype, tlvs)
-			db.db[lspid] = lsp
+			lsp = db.newLSPSegment(payload, tlvs)
 		}
 
 		db.setAllFlag(SRM, &lsp.lspid, c)
@@ -507,9 +540,9 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs m
 }
 
 // updateLSP updates an lspSegment with a newer version received on a link.
-func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) {
+func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
 	if db.debug != nil {
-		db.debug("Updating %s", lsp)
+		db.debug("%s: Updating %s", db, lsp)
 	}
 
 	// On entering the hold timer has already been stopped by receiveLSP
@@ -532,15 +565,17 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, pdutype clns.PDU
 		}
 		if lsp.zeroLife == nil {
 			// New purge.
-			db.debug("Received Purge LSP %s", lsp)
+			db.debug("%s: Received Purge LSP %s", db, lsp)
 			lsp.zeroLife = xtime.NewHoldTimer(clns.ZeroMaxAge,
 				func() { db.expireC <- lsp.lspid })
 		} else if lsp.zeroLife.Until() < clns.ZeroMaxAge {
 			// Refresh zero age. If we can't reset the timer b/c
-			// it's firing just create a new one. We handle it.
-			if !lsp.zeroLife.Reset(clns.ZeroMaxAge) {
+			// it's fired/firing just create a new one. We handle it.
+			if !lsp.zeroLife.Stop() {
 				lsp.zeroLife = xtime.NewHoldTimer(clns.ZeroMaxAge,
 					func() { db.expireC <- lsp.lspid })
+			} else {
+				lsp.zeroLife.Reset(clns.ZeroMaxAge)
 			}
 		}
 		return
@@ -572,7 +607,65 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, pdutype clns.PDU
 	//      lsp.refreshTimer.Reset(timeleft)
 	// }
 
-	db.debug("Updated %s", lsp)
+	db.debug("%s: Updated %s", db, lsp)
+}
+
+func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVMap) {
+	var mentioned map[clns.LSPID]struct{}
+	if complete {
+		mentioned = make(map[clns.LSPID]struct{})
+	}
+
+	// ISO10589: 8.3.15.2.b
+	entries, err := tlvs.SNPEntryValues()
+	if err != nil {
+		db.debug("%s: Error parsing SNP Entries: %s", db, err)
+		return
+	}
+
+	for _, e := range entries {
+		var elspid clns.LSPID
+		copy(elspid[:], e[tlv.SNPEntLSPID:])
+		lsp := db.db[elspid]
+		mentioned[elspid] = struct{}{}
+
+		// 7.3.15.2: b1
+		result := compareLSP(lsp, e)
+		switch result {
+		case SAME:
+			if c.IsP2P() {
+				// 7.3.15.2: b2 ack received, stop sending on p2p
+				db.clearFlag(SRM, &elspid, c)
+			}
+		case OLDER:
+			// 7.3.15.2: b3 flood newer from our DB
+			db.clearFlag(SSN, &elspid, c)
+			db.setFlag(SRM, &elspid, c)
+		case NEWER:
+			if lsp != nil {
+				// 7.3.15.2: b4 Request newer.
+				db.setFlag(SSN, &elspid, c)
+				if c.IsP2P() {
+					db.clearFlag(SRM, &elspid, c)
+				}
+			} else {
+				// 7.3.15.2: b5 Add zero seqno segment for missing
+				lifetime := pkt.GetUInt16(e[tlv.SNPEntLifetime:])
+				seqno := pkt.GetUInt32(e[tlv.SNPEntSeqNo:])
+				cksum := pkt.GetUInt16(e[tlv.SNPEntCksum:])
+				if lifetime != 0 && seqno != 0 && cksum != 0 {
+					_ = db.newZeroLSPSegment(lifetime, &elspid, cksum)
+					db.setFlag(SSN, &elspid, c)
+				}
+
+			}
+		}
+	}
+	if !complete {
+		return
+	}
+	// 7.3.15.2.c Set SRM for all LSP we have that were not mentioned.
+	// XXX
 }
 
 func (db *DB) runOnce() {
@@ -581,12 +674,21 @@ func (db *DB) runOnce() {
 		if db.dis[in.cid] == BoolToTrit(in.set) {
 			break
 		}
-		db.debug("UPD: DIS Change for %d to %d", in.cid, in.set)
+		db.debug("%s: DIS Change for %d to %d", db, in.cid, in.set)
 		db.dis[in.cid] = BoolToTrit(in.set)
 		// XXX Originate or Purge PNode.
 
-	case in := <-db.lspC:
-		db.receiveLSP(in.c, in.payload, in.pdutype, in.tlvs)
+	case in := <-db.pduC:
+		switch in.pdutype {
+		case clns.PDUTypeLSPL1, clns.PDUTypeLSPL2:
+			db.receiveLSP(in.c, in.payload, in.tlvs)
+		case clns.PDUTypeCSNPL1, clns.PDUTypeCSNPL2:
+			db.receiveSNP(in.c, true, in.payload, in.tlvs)
+		case clns.PDUTypePSNPL1, clns.PDUTypePSNPL2:
+			db.receiveSNP(in.c, false, in.payload, in.tlvs)
+		default:
+			panic(fmt.Sprintf("%s: unexpected PDU type %s", db, in.pdutype))
+		}
 
 	// Do things above this that may affect expiration of LSP segment
 	case lspid := <-db.expireC:

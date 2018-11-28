@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/pkt"
@@ -45,27 +46,25 @@ type Adj struct {
 	sysid     clns.SystemID
 	lanID     clns.NodeID
 	areas     [][]byte
-	db        *AdjDB
-	l         clns.Level //  need to change this to LevelFlag for p2p
-	li        clns.LIndex
+	lf        clns.LevelFlag //  need to change this to LevelFlag for p2p
 	priority  uint8
 	hold      uint16
 	holdTimer *time.Timer
+	link      Link
 }
 
 func (a *Adj) String() string {
-	return fmt.Sprintf("Adj(%s on %s)", clns.ISOString(a.sysid[:], false), a.db.link)
+	return fmt.Sprintf("Adj(%s on %s)", clns.ISOString(a.sysid[:], false), a.link)
 }
 
 //
 // NewAdj creates and initializes a new adjacency.
 //
-func NewAdj(db *AdjDB, snpa [clns.SNPALen]byte, srcid [clns.SysIDLen]byte, payload []byte, tlvs map[tlv.Type][]tlv.Data) *Adj {
+func NewAdj(link Link, snpa [clns.SNPALen]byte, srcid [clns.SysIDLen]byte, payload []byte, tlvs map[tlv.Type][]tlv.Data) *Adj {
 	a := &Adj{
+		link:  link,
 		State: AdjStateDown,
 		sysid: srcid,
-		db:    db,
-		l:     db.l,
 	}
 	if payload[clns.HdrCLNSPDUType] != clns.PDUTypeIIHP2P {
 		iih := payload[clns.HdrCLNSSize:]
@@ -80,13 +79,8 @@ func NewAdj(db *AdjDB, snpa [clns.SNPALen]byte, srcid [clns.SysIDLen]byte, paylo
 	return a
 }
 
-//
 // Update updates the adjacency with the information from the IIH, returns true
 // if DIS election should be re-run.
-//
-// Locking: We are called from AdjDB which has a lock to avoid a race with the
-// hold timer.
-//
 func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 	rundis := false
 	iihp := payload[clns.HdrCLNSSize:]
@@ -99,7 +93,7 @@ func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 		}
 	}
 
-	if a.l == 1 {
+	if a.lf.IsLevelEnabled(1) {
 		// Update Areas
 		areas, err := tlvs[tlv.TypeAreaAddrs][0].AreaAddrsValue()
 		if err != nil {
@@ -109,11 +103,33 @@ func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 		a.areas = areas
 	}
 
+	if a.holdTimer != nil && !a.holdTimer.Stop() {
+		debug(DbgFAdj, "%s failed to stop hold timer in time, letting expire", a)
+		return false
+	}
+
 	oldstate := a.State
 	a.State = AdjStateInit
 
-	if err := a.db.link.UpdateAdjState(a, tlvs); err != nil {
-		return false
+	if a.link.IsP2P() {
+		// XXX writeme
+	} else {
+		ourSNPA := a.link.GetOurSNPA()
+	forloop:
+		// Walk neighbor TLVs if we see ourselves mark adjacency Up.
+		for _, ntlv := range tlvs[tlv.TypeISNeighbors] {
+			addrs, err := ntlv.ISNeighborsValue()
+			if err != nil {
+				logger.Printf("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
+				break
+			}
+			for _, snpa := range addrs {
+				if bytes.Equal(snpa, ourSNPA) {
+					a.State = AdjStateUp
+					break forloop
+				}
+			}
+		}
 	}
 
 	if a.State != oldstate {
@@ -132,12 +148,11 @@ func (a *Adj) Update(payload []byte, tlvs map[tlv.Type][]tlv.Data) bool {
 	if a.holdTimer == nil {
 		a.holdTimer = time.AfterFunc(time.Second*time.Duration(a.hold),
 			func() {
-				a.db.ExpireAdj(a)
+				sysid := a.sysid
+				a.link.ExpireAdj(sysid)
 			})
-	} else if !a.holdTimer.Reset(time.Second * time.Duration(a.hold)) {
-		// Our function has already been called so we will expire.
-		return false
+	} else {
+		a.holdTimer.Reset(time.Second * time.Duration(a.hold))
 	}
-
 	return rundis
 }

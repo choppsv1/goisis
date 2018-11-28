@@ -3,16 +3,13 @@
 //
 // December 28 2017, Christian E. Hopps <chopps@gmail.com>
 //
-//                   RecvLANHello <------+ Hellos processed inline
-//                                       |
-//  LSP                        +-+  <-- FrameToPDU <- readPackets (circuit 1 go rtn)
-// (per-lvl) Update Process <- |D|
-//                             |s|   ...
-//     (per-link) flood rtn <- |p|
-//  SNP                        +-+  <-- FrameToPDU <- readPackets (circuit N go rtn)
-//
-//  - Hello PDUs are processed in the circuit's go rtn
-//  - inpkts is actually 2 channels for LSP and SNP separately.
+// (per-link) hello process <- +-+
+//                             |D|  <-- FrameToPDU <- readPackets (circuit 1 go rtn)
+//  LSP                        |s|   ...
+// (per-lvl) Update Process <- |p|  <-- FrameToPDU <- readPackets (circuit N go rtn)
+//                             |c|
+//     (per-link) flood rtn <- |h|
+//  SNP                        +-+
 //
 package main
 
@@ -46,19 +43,15 @@ func (base *CircuitBase) readPackets(c Circuit) {
 		if pdu == nil {
 			continue
 		}
+
 		// Receive IIH inside the circuit's go routine in parallel.
 		switch pdu.pdutype {
-		case clns.PDUTypeIIHLANL1:
-			l, _ := pdu.pdutype.GetPDULevel()
-			RecvLANHello(pdu.link, pdu, l)
-		case clns.PDUTypeIIHLANL2:
-			l, _ := pdu.pdutype.GetPDULevel()
-			RecvLANHello(pdu.link, pdu, l)
+		case clns.PDUTypeIIHLANL1, clns.PDUTypeIIHLANL2, clns.PDUTypeIIHP2P:
+			c.RecvHello(pdu)
 		case clns.PDUTypeLSPL1, clns.PDUTypeLSPL2:
-			debug(DbgFPkt, "Sending LSP from %s to UPD", base)
 			base.updb[pdu.li].InputLSP(c, pdu.payload, pdu.pdutype, pdu.tlvs)
 		case clns.PDUTypeCSNPL1, clns.PDUTypeCSNPL2, clns.PDUTypePSNPL1, clns.PDUTypePSNPL2:
-			c.ProcessSNP(pdu)
+			base.updb[pdu.li].InputSNP(c, pdu.payload, pdu.pdutype, pdu.tlvs)
 		default:
 			debug(DbgFPkt, "Unknown PDU type %s on %s\n", pdu.pdutype, base.intf.Name)
 		}

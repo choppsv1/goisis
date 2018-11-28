@@ -100,7 +100,7 @@ func main() {
 	dbdebug := func(format string, a ...interface{}) {}
 	if debugIsSet(DbgFUpd) {
 		dbdebug = func(format string, a ...interface{}) {
-			debug(DbgFUpd, format, a)
+			debug(DbgFUpd, format, a...)
 		}
 	}
 	for l := clns.Level(1); l <= 2; l++ {

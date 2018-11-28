@@ -11,8 +11,6 @@ import (
 type CircuitDB struct {
 	circuits map[string]Circuit
 	flagsC   chan update.ChgSxxFlag
-	iihpkts  chan *RecvPDU
-	snppkts  chan *RecvPDU
 }
 
 // NewCircuitDB allocate and initialize a new circuit database.
@@ -20,8 +18,6 @@ func NewCircuitDB() *CircuitDB {
 	cdb := &CircuitDB{
 		circuits: make(map[string]Circuit),
 		flagsC:   make(chan update.ChgSxxFlag),
-		iihpkts:  make(chan *RecvPDU),
-		snppkts:  make(chan *RecvPDU),
 	}
 
 	go cdb.processChgFlags()
@@ -46,7 +42,7 @@ func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*upda
 }
 
 func (cdb *CircuitDB) processChgFlag(cf *update.ChgSxxFlag) {
-	cfc := cf.C.(Circuit)
+	cfc, _ := cf.C.(Circuit)
 	if cf.Set {
 		if !cf.All {
 			cfc.SetFlag(cf.Flag, &cf.Lspid, cf.Li)

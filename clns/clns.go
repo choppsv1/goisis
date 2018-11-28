@@ -462,7 +462,7 @@ func (e ErrInvalidPacket) Error() string {
 }
 
 // ValidatePDU validates (to an extent) a CLNS payload, and returns a correct
-// version of it. (ISO10589 8.4.2.1 and 7.3.15.{1,2}: 2, 3, 4, 5)
+// version of it. (ISO10589 8.4.2.1.[ab] and 7.3.15.{1,2}.a: 1* 2, 3, 4, 5)
 // Checked Valid Items:  PDU Type, Header Length, PDU Length, Advertised
 // versions(*), Advertised sizes -- (*) XXX finish
 func ValidatePDU(llc, payload []byte, istype, ctype LevelFlag) ([]byte, PDUType, error) {

@@ -55,7 +55,7 @@ type Circuit interface {
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
-	ProcessSNP(*RecvPDU)
+	RecvHello(pdu *RecvPDU)
 	SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex)
 }
 
@@ -233,7 +233,7 @@ func (c *CircuitLAN) OpenFrame(dst net.HardwareAddr) (ether.Frame, []byte) {
 	copy(etherp[ether.HdrEthDest:], dst)
 	copy(etherp[ether.HdrEthSrc:], c.intf.HardwareAddr)
 
-	debug(DbgFPkt, "OpenFrame dst: %s, src: %s\n",
+	debug(DbgFPkt, "OpenFrame dst: %s, src: %s typelen %x\n",
 		etherp.GetDst(), etherp.GetSrc(), etherp.GetTypeLen())
 
 	llcp := etherp[ether.HdrEthSize:]
@@ -289,6 +289,17 @@ func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) ether.Frame {
 	return etherp
 }
 
+func (c *CircuitLAN) RecvHello(pdu *RecvPDU) {
+	li := pdu.pdutype.GetPDULIndex()
+	ll := c.levlink[li]
+	if ll == nil {
+		debug(DbgFPkt, "%s: Received %s IIH on %s circuit", c, pdu.pdutype, c.lf)
+		return
+	}
+	ll.iihpkt <- pdu
+
+}
+
 // SetFlag sets the given flag for the given LSPID for the given level (li)
 func (c *CircuitLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
 	debug(DbgFFlags, "%s: Set %s %s %s", c, flag, *lspid, li.ToLevel())
@@ -303,26 +314,4 @@ func (c *CircuitLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.L
 
 func (c *CircuitLAN) IsP2P() bool {
 	return false
-}
-
-func (c *CircuitLAN) ProcessSNP(pdu *RecvPDU) {
-	// Validate ethernet values.
-	// var src, dst [clns.SNPALen]byte
-	// l, err := pdu.pdutype.GetPDULevel()
-	// if err != nil {
-	// 	return err
-	// }
-
-	switch pdu.pdutype {
-	case clns.PDUTypeCSNPL1:
-		debug(DbgFPkt, "INFO: ignoring CSNPL1 on %s for now", c)
-	case clns.PDUTypeCSNPL2:
-		debug(DbgFPkt, "INFO: ignoring CSNPL2 on %s for now", c)
-	case clns.PDUTypePSNPL1:
-		debug(DbgFPkt, "INFO: ignoring PSNPL1 on %s for now", c)
-	case clns.PDUTypePSNPL2:
-		debug(DbgFPkt, "INFO: ignoring PSNPL2 on %s for now", c)
-	default:
-		panic("Illegal PDU type")
-	}
 }

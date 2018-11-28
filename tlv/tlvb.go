@@ -183,7 +183,7 @@ func (b Data) newFixedValues(alen int, atyp interface{}) error {
 type ErrTLVSpaceCorrupt string
 
 func (e ErrTLVSpaceCorrupt) Error() string {
-	return fmt.Sprintf("%s", string(e))
+	return string(e)
 }
 
 type TLVMap map[Type][]Data
@@ -276,6 +276,46 @@ func (b Data) LSPBufSizeValue() (uint16, error) {
 		return 0, fmt.Errorf("Length of data %d is not 2", l)
 	}
 	return binary.BigEndian.Uint16(v), nil
+}
+
+// TypeSNPEntries TLV value offsets
+const (
+	SNPEntLifetime = iota
+	SNPEntLSPID    = SNPEntLifetime + 2
+	SNPEntSeqNo    = SNPEntLSPID + clns.LSPIDLen
+	SNPEntCksum    = SNPEntSeqNo + 4
+	SNPEntSize     = SNPEntCksum + 2
+)
+
+func Slicer(b []byte, start int, length int) []byte {
+	return b[start : start+length]
+}
+
+// SNPEntryValues returns slice of all SNPEntry values in the TLVMap.
+func (tlvs TLVMap) SNPEntryValues() ([][]byte, error) {
+	count := 0
+	for _, b := range tlvs[TypeSNPEntries] {
+		l := len(b)
+		if l%SNPEntSize != 0 {
+			return nil, ErrTLVSpaceCorrupt(
+				fmt.Sprintf("SNP Entries TLV not multiple of %d", SNPEntSize))
+		}
+		count += l / SNPEntSize
+	}
+	entries := make([][]byte, count)
+	ei := 0
+	for _, b := range tlvs[TypeSNPEntries] {
+		// XXX this can be done faster using unsafe and just
+		// constructing a new map with the backing array :)
+		bi := 0
+		count = len(b) / SNPEntSize
+		for i := 0; i < count; i++ {
+			entries[ei] = Slicer(b, bi, SNPEntSize)
+			bi += SNPEntSize
+			ei++
+		}
+	}
+	return entries, nil
 }
 
 // =======================
@@ -452,12 +492,3 @@ func AddIntfAddrs(p Data, addrs []net.IPNet) (Data, error) {
 	}
 	return tlv.Close(), nil
 }
-
-// TypeSNPEntries TLV value offsets
-const (
-	SNPLifetime = iota
-	SNPEntLSPID = SNPLifetime + 2
-	SNPEntSeqNo = SNPEntLSPID + clns.LSPIDLen
-	SNPEntCksum = SNPEntSeqNo + 4
-	SNPEntSize  = SNPEntCksum + 2
-)

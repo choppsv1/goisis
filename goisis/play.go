@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"sync"
 	"time"
+	// "unsafe"
 )
 
 type addr []byte
@@ -37,8 +38,15 @@ func playground() {
 	var a addr = ab
 	m := make(map[int]int)
 
+	// var snpe tlv.SNPEntry
+	// fmt.Printf("OffsetOf Lifetime: %u\n", unsafe.Offsetof(snpe.Lifetime))
+	// fmt.Printf("OffsetOf LSPID: %u\n", unsafe.Offsetof(snpe.LSPID))
+	// fmt.Printf("OffsetOf SeqNo: %u\n", unsafe.Offsetof(snpe.SeqNo))
+	// fmt.Printf("OffsetOf Chksum: %u\n", unsafe.Offsetof(snpe.Chksum))
+
 	t := time.AfterFunc(10*time.Second, func() {})
 	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
+	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Reset(10*time.Second))
 	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
 	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
 

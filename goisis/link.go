@@ -2,12 +2,12 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/goisis/update"
 	"github.com/choppsv1/goisis/tlv"
+	"net"
 	"time"
 )
 
@@ -27,23 +27,16 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 //
 type Link interface {
 	ClearFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
-	DISInfoChanged()
 	IsP2P() bool
 	SetFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
-	UpdateAdj(*RecvPDU) error
-	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
+	RecvHello(*RecvPDU) bool
+	GetOurSNPA() net.HardwareAddr
+	ExpireAdj(clns.SystemID)
 }
 
 // =====
 // Types
 // =====
-
-type DISEvent uint8
-
-const (
-	DISEventTimer DISEvent = iota // DIS Timer has expired.
-	DISEventInfo                  // DIS Info has changed.
-)
 
 // SendLSP is the value passed on the sendLSP channel
 type SendLSP struct {
@@ -74,25 +67,19 @@ type LinkLAN struct {
 	lclCircID uint8
 	lanID     clns.NodeID
 	ourlanID  clns.NodeID
-	adjdb     *AdjDB
 
-	// Hello Process DIS
-	disInfoChanged chan DISEvent
-	disElected     bool
+	// Hello Process
+	expireC    chan clns.SystemID
+	iihpkt     chan *RecvPDU
+	disTimer   *time.Timer
+	disElected bool
+	snpaMap    map[[clns.SNPALen]byte]*Adj
+	srcidMap   map[[clns.SysIDLen]byte]*Adj
 
 	// Update Process
 	lspdb  *update.DB
-	snppkt chan<- *RecvPDU
 	flagsC chan ChgSxxFlag
 	flags  [2]update.FlagSet
-}
-
-func (e DISEvent) String() string {
-	if e == DISEventTimer {
-		return "DISEventTimer"
-	} else {
-		return "DISEventInfo"
-	}
 }
 
 func (link *LinkLAN) String() string {
@@ -104,22 +91,21 @@ func (link *LinkLAN) String() string {
 //
 func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool) *LinkLAN {
 	link := &LinkLAN{
-		circuit:        c,
-		l:              li.ToLevel(),
-		li:             li,
-		updb:           updb,
-		priority:       clns.DefHelloPri,
-		helloInt:       clns.DefHelloInt,
-		holdMult:       clns.DefHelloMult,
-		disInfoChanged: make(chan DISEvent),
-		flagsC:         make(chan ChgSxxFlag),
-		flags:          [2]update.FlagSet{make(update.FlagSet), make(update.FlagSet)},
+		circuit:  c,
+		l:        li.ToLevel(),
+		li:       li,
+		updb:     updb,
+		priority: 0, // clns.DefHelloPri,
+		helloInt: clns.DefHelloInt,
+		holdMult: clns.DefHelloMult,
+		expireC:  make(chan clns.SystemID),
+		iihpkt:   make(chan *RecvPDU),
+		snpaMap:  make(map[[clns.SNPALen]byte]*Adj),
+		srcidMap: make(map[[clns.SysIDLen]byte]*Adj),
+		flagsC:   make(chan ChgSxxFlag),
+		flags:    [2]update.FlagSet{make(update.FlagSet), make(update.FlagSet)},
+		lspdb:    c.updb[li],
 	}
-	link.adjdb = NewAdjDB(link, link.li)
-	link.lspdb = c.updb[li]
-	//link.flags[0] = make(update.FlagSet)
-	//link.flags[1] = make(update.FlagSet)
-
 	lanLinkCircuitIDs[li]++
 	link.lclCircID = lanLinkCircuitIDs[li]
 	copy(link.ourlanID[:], GlbSystemID)
@@ -130,14 +116,11 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true
 
 	// Start Sending Hellos
-	go StartLANHellos(link, link.helloInt, quit)
+	StartHelloProcess(link, link.helloInt, quit)
 
 	// Start DIS election routine
 	dur := time.Second * time.Duration(link.helloInt*2)
-	time.AfterFunc(dur, func() {
-		debug(DbgFDIS, "INFO: %s DIS timer expired", link)
-		link.disInfoChanged <- DISEventTimer
-	})
+	link.disTimer = time.NewTimer(dur)
 
 	go link.processFlags()
 
@@ -148,151 +131,17 @@ func (link *LinkLAN) IsP2P() bool {
 	return false
 }
 
+func (link *LinkLAN) GetOurSNPA() net.HardwareAddr {
+	return link.circuit.CircuitBase.intf.HardwareAddr
+}
+
+func (link *LinkLAN) ExpireAdj(sysid clns.SystemID) {
+	link.expireC <- sysid
+}
+
 // -------------------
 // Adjacency Functions
 // -------------------
-
-// UpdateAdj updates an adjacency with the new PDU information.
-func (link *LinkLAN) UpdateAdj(pdu *RecvPDU) error {
-	link.adjdb.UpdateAdj(pdu)
-	return nil
-}
-
-// DISInfoChanged is called when something has happened to require rerunning of
-// DIS election on this Link.
-func (link *LinkLAN) DISInfoChanged() {
-	link.disInfoChanged <- DISEventInfo
-}
-
-//
-// UpdateAdjState updates the adj state according to the TLV found in the IIH
-//
-func (link *LinkLAN) UpdateAdjState(a *Adj, tlvs map[tlv.Type][]tlv.Data) error {
-	// Walk neighbor TLVs if we see ourselves mark adjacency Up.
-	for _, ntlv := range tlvs[tlv.TypeISNeighbors] {
-		addrs, err := ntlv.ISNeighborsValue()
-		if err != nil {
-			logger.Printf("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
-			return err
-		}
-		for _, snpa := range addrs {
-			if bytes.Equal(snpa, link.circuit.getOurSNPA()) {
-				a.State = AdjStateUp
-				break
-			}
-		}
-		if a.State == AdjStateUp {
-			break
-		}
-	}
-	return nil
-}
-
-// ------------
-// DIS election
-// ------------
-
-//
-// disFindBest - ISO10589: 8.4.5
-//
-// Locking: called with adjdb locked
-//
-func (link *LinkLAN) disFindBest() (bool, *Adj) {
-	electPri := link.priority
-	electID := GlbSystemID
-	var elect *Adj
-	count := 0
-	for _, a := range link.adjdb.srcidMap {
-		if a.State != AdjStateUp {
-			debug(DbgFDIS, "%s skipping non-up adj %s", link, a)
-			continue
-		}
-		count++
-		if a.priority > electPri {
-			debug(DbgFDIS, "%s adj %s better priority %d", link, a, a.priority)
-			elect = a
-			electPri = a.priority
-			electID = a.sysid[:]
-		} else if a.priority == electPri {
-			debug(DbgFDIS, "%s adj %s same priority %d", link, a, a.priority)
-			if bytes.Compare(a.sysid[:], electID) > 0 {
-				elect = a
-				electPri = a.priority
-				electID = a.sysid[:]
-			}
-		} else {
-			debug(DbgFDIS, "%s adj %s worse priority %d", link, a, a.priority)
-		}
-	}
-	if count == 0 {
-		debug(DbgFDIS, "%s no adj, no dis", link)
-		// No adjacencies, no DIS
-		return false, nil
-	}
-	return elect == nil, elect
-}
-
-func (link *LinkLAN) disSelfElect() {
-	// Always let the update process know.
-	link.updb.SetDIS(link.lclCircID, true)
-
-	if link.disElected {
-		return
-	}
-	link.disElected = true
-
-	// XXX Start the CNSP timer.
-}
-
-func (link *LinkLAN) disSelfResign() {
-	// Always let the update process know.
-	link.updb.SetDIS(link.lclCircID, false)
-
-	if !link.disElected {
-		return
-	}
-	link.disElected = false
-
-	// XXX Stop CNSP timer.
-}
-
-func (link *LinkLAN) disElect() {
-	debug(DbgFDIS, "Running DIS election on %s", link)
-
-	link.adjdb.lock.Lock()
-	defer link.adjdb.lock.Unlock()
-
-	var newLANID clns.NodeID
-	oldLANID := link.lanID
-
-	electUs, electOther := link.disFindBest()
-	if electUs {
-		debug(DbgFDIS, "%s electUS", link)
-		newLANID = link.ourlanID
-	} else if electOther != nil {
-		debug(DbgFDIS, "%s electOther %s", link, electOther)
-		newLANID = electOther.lanID
-	}
-
-	if oldLANID == newLANID {
-		debug(DbgFDIS, "Same DIS elected: %s", newLANID)
-		return
-	}
-
-	debug(DbgFDIS, "DIS change: old %s new %s", oldLANID, newLANID)
-
-	if !electUs {
-		link.disSelfResign()
-		if electOther == nil {
-			// XXX No DIS -- maybe put a zero here?
-			link.lanID = link.ourlanID
-		} else {
-			link.lanID = newLANID
-		}
-	} else {
-		link.disSelfElect()
-	}
-}
 
 // --------
 // Flooding
