@@ -103,9 +103,10 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 		case pdu := <-link.iihpkt:
 			rundis = pdu.link.RecvHello(pdu)
 		case srcid := <-link.expireC:
+			debug(DbgFAdj, "Adj for %s on %s expiring.", srcid, link)
 			a := link.srcidMap[srcid]
 			if a == nil {
-				debug(DbgFDIS, "Adj for %s on %s is already gone.", srcid, link)
+				debug(DbgFAdj, "Adj for %s on %s is already gone.", srcid, link)
 				break
 			}
 			// If the adjacency was up then we need to rerun DIS election.
@@ -117,6 +118,7 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 			disWaiting = false
 			rundis = true
 		case <-tickC:
+			debug(DbgFAdj, "Ticker timer fires %s", link)
 			sendLANHello(link)
 		}
 
@@ -433,7 +435,9 @@ func (link *LinkLAN) disFindBest() (bool, *Adj) {
 
 func (link *LinkLAN) disSelfElect() {
 	// Always let the update process know.
+	debug(DbgFDIS, "DIS change: elect %v", link)
 	link.updb.SetDIS(link.lclCircID, true)
+	debug(DbgFDIS, "DIS change: elect %v done", link)
 
 	if link.disElected {
 		return
@@ -445,7 +449,9 @@ func (link *LinkLAN) disSelfElect() {
 
 func (link *LinkLAN) disSelfResign() {
 	// Always let the update process know.
+	debug(DbgFDIS, "DIS change: resign %v", link)
 	link.updb.SetDIS(link.lclCircID, false)
+	debug(DbgFDIS, "DIS change: resign %v done", link)
 
 	if !link.disElected {
 		return

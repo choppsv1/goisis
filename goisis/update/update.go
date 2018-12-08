@@ -136,6 +136,7 @@ func NewDB(sysid []byte, l clns.Level, flagsC chan<- ChgSxxFlag, debug func(stri
 		flagsC:  flagsC,
 		db:      make(map[clns.LSPID]*lspSegment),
 		pduC:    make(chan inputPDU),
+		disC:    make(chan chgDIS),
 		getlspC: make(chan inputGetLSP),
 		getsnpC: make(chan inputGetSNP),
 		expireC: make(chan clns.LSPID),

@@ -51,13 +51,19 @@ func main() {
 	}
 
 	// Initialize debug flags.
-	for _, fstr := range strings.Split(*dbgIDPtr, ",") {
-		flag, ok := FlagNames[fstr]
-		if !ok {
-			fmt.Printf("Unknown debug flag: %s\n", fstr)
-			continue
+	if strings.Compare(*dbgIDPtr, "all") == 0 {
+		for fstr := range FlagNames {
+			GlbDebug |= FlagNames[fstr]
 		}
-		GlbDebug |= flag
+	} else {
+		for _, fstr := range strings.Split(*dbgIDPtr, ",") {
+			flag, ok := FlagNames[fstr]
+			if !ok {
+				fmt.Printf("Unknown debug flag: %s\n", fstr)
+				continue
+			}
+			GlbDebug |= flag
+		}
 	}
 
 	// Initialize instance type
