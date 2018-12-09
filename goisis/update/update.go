@@ -399,8 +399,8 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 	}
 
 	// Update the lifetime to zero if it wasn't already.
-	pkt.PutUInt16(lsp.hdr[:clns.HdrLSPLifetime], 0)
-	db.debug("%s: Lifetime for %s expired, purging.", db, lsp)
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], 0)
+	db.debug("%s: Purging %s zeroMaxAge: %d", db, lsp, zeroMaxAge)
 
 	if lsp.zeroLife != nil {
 		panic("Initiating a purge on a purged LSP")
@@ -584,8 +584,10 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 
 	if lsp.life != nil {
 		// Reset the hold timer
+		db.debug("%s: Resetting hold timer for %s", db, lsp)
 		lsp.life.Reset(lifetime)
 	} else {
+		db.debug("%s: Resetting hold timer for Purged %s", db, lsp)
 		// We should never see both nil we would have deleted it.
 		if lsp.zeroLife == nil {
 			panic(fmt.Sprintf("WARNING: both life and zero nil for %s", lsp))
@@ -710,9 +712,13 @@ func (db *DB) runOnce() {
 			break
 		}
 		db.debug("2) <-expireC %s", lspid)
-		if lsp.life != nil && lsp.life.Until() != 0 {
-			db.debug("<-expireC: %s ressurected", lsp)
-			break
+		if lsp.life != nil {
+			if lsp.life.Until() != 0 {
+				db.debug("<-expireC: %s ressurected", lsp)
+				break
+			}
+			// Done with timer.
+			lsp.life = nil
 		}
 		db.debug("3) <-expireC %s", lspid)
 		if lsp.zeroLife == nil {
