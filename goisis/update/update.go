@@ -274,8 +274,7 @@ func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
 
 // newLSPSegment creates a new lspSegment struct
 func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSegment {
-	hdr := payload[clns.HdrCLNSSize:]
-	hdr = hdr[:clns.HdrLSPSize]
+	hdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	lsp := &lspSegment{
 		payload: payload,
 		hdr:     hdr,
@@ -722,7 +721,7 @@ func (db *DB) runOnce() {
 		}
 		db.debug("3) <-expireC %s", lspid)
 		if pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:]) == 0 {
-			db.debug("Deleting Zero-SeqNo %s", lsp)
+			db.debug("Deleting Zero-SeqNo LSP %s", lspid)
 			delete(db.db, lsp.lspid)
 		} else if lsp.zeroLife == nil {
 			db.debug("4) <-expireC %s", lspid)
