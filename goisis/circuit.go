@@ -111,7 +111,7 @@ func NewCircuitBase(ifname string, lf clns.LevelFlag, cdb *CircuitDB, updb [2]*u
 		lf:     lf,
 		cdb:    cdb,
 		updb:   updb,
-		outpkt: make(chan []byte),
+		outpkt: make(chan []byte, 10),
 		quit:   quit,
 	}
 

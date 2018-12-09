@@ -135,11 +135,11 @@ func NewDB(sysid []byte, l clns.Level, flagsC chan<- ChgSxxFlag, debug func(stri
 		li:      l.ToIndex(),
 		flagsC:  flagsC,
 		db:      make(map[clns.LSPID]*lspSegment),
-		pduC:    make(chan inputPDU),
-		disC:    make(chan chgDIS),
-		getlspC: make(chan inputGetLSP),
-		getsnpC: make(chan inputGetSNP),
-		expireC: make(chan clns.LSPID),
+		pduC:    make(chan inputPDU, 10),
+		disC:    make(chan chgDIS, 10),
+		getlspC: make(chan inputGetLSP, 10),
+		getsnpC: make(chan inputGetSNP, 10),
+		expireC: make(chan clns.LSPID, 10),
 	}
 	copy(db.sysid[:], sysid)
 	go db.Run()
@@ -222,7 +222,7 @@ func (db *DB) SetDIS(cid uint8, set bool) {
 // CopyLSPPayload copies the LSP payload buffer for sending if found and returns
 // the count of copied bytes, otherwise returns 0.
 func (db *DB) CopyLSPPayload(lspid *clns.LSPID, payload []byte) int {
-	result := make(chan int)
+	result := make(chan int, 1)
 	db.getlspC <- inputGetLSP{lspid, payload, result}
 	l := <-result
 	close(result)
@@ -231,7 +231,7 @@ func (db *DB) CopyLSPPayload(lspid *clns.LSPID, payload []byte) int {
 
 // CopyLSPSNP copies the lspSegment SNP data if found and return true, else false
 func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
-	result := make(chan bool)
+	result := make(chan bool, 1)
 	db.getsnpC <- inputGetSNP{lspid, ent, result}
 	found := <-result
 	close(result)
@@ -681,7 +681,7 @@ func (db *DB) runOnce() {
 		if db.dis[in.cid] == BoolToTrit(in.set) {
 			break
 		}
-		db.debug("%s: DIS Change for %d to %d", db, in.cid, in.set)
+		db.debug("%s: DIS Change for CircuitID %d to %v", db, in.cid, in.set)
 		db.dis[in.cid] = BoolToTrit(in.set)
 		// XXX Originate or Purge PNode.
 

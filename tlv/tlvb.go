@@ -308,6 +308,7 @@ func (tlvs TLVMap) SNPEntryValues() ([][]byte, error) {
 		// XXX this can be done faster using unsafe and just
 		// constructing a new map with the backing array :)
 		bi := 0
+		b = b[2:]
 		count = len(b) / SNPEntSize
 		for i := 0; i < count; i++ {
 			entries[ei] = Slicer(b, bi, SNPEntSize)

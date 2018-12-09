@@ -17,7 +17,7 @@ type CircuitDB struct {
 func NewCircuitDB() *CircuitDB {
 	cdb := &CircuitDB{
 		circuits: make(map[string]Circuit),
-		flagsC:   make(chan update.ChgSxxFlag),
+		flagsC:   make(chan update.ChgSxxFlag, 10),
 	}
 
 	go cdb.processChgFlags()
