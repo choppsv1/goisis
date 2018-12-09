@@ -171,8 +171,7 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 	// Check the checksum
 	lspbuf := payload[clns.HdrCLNSSize:]
 	if pkt.GetUInt16(lspbuf[clns.HdrLSPLifetime:]) != 0 {
-		cksum := 0
-		// cksum = iso_cksum(lspbuf[4:])
+		cksum := clns.Cksum(lspbuf[4:], 0)
 		if cksum != 0 {
 			fcksum := pkt.GetUInt16(lspbuf[clns.HdrLSPCksum:])
 			return ErrLSP(fmt.Sprintf("TRAP corruptedLSPReceived: %s got 0x%04x expect 0x%04x dropping", c, cksum, fcksum))

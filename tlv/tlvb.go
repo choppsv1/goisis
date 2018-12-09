@@ -295,7 +295,7 @@ func Slicer(b []byte, start int, length int) []byte {
 func (tlvs TLVMap) SNPEntryValues() ([][]byte, error) {
 	count := 0
 	for _, b := range tlvs[TypeSNPEntries] {
-		l := len(b)
+		l := len(b) - 2
 		if l%SNPEntSize != 0 {
 			return nil, ErrTLVSpaceCorrupt(
 				fmt.Sprintf("SNP Entries TLV not multiple of %d", SNPEntSize))
