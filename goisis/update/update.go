@@ -195,7 +195,7 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 
 	// Finish the rest in our update process go routine (avoid locking)
 
-	db.debug("%s: Sending LSP from %s to Update Process", db, c)
+	db.debug("%s: Channeling LSP from %s to Update Process", db, c)
 	db.pduC <- inputPDU{c, payload, pdutype, tlvs}
 	return nil
 }
@@ -209,7 +209,7 @@ func (db *DB) InputSNP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 	// a.1-5 already done in receive 6 Check SNPA from an adj (use function)
 	// a.[78] check password/auth
 
-	db.debug("%s: Sending SNP from %s to Update Process", db, c)
+	db.debug("%s: Channeling SNP from %s to Update Process", db, c)
 	db.pduC <- inputPDU{c, payload, pdutype, tlvs}
 	return nil
 }
@@ -282,10 +282,10 @@ func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSe
 	}
 	copy(lsp.lspid[:], hdr[clns.HdrLSPLSPID:])
 
-	lifesec := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
+	lifetime := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
 	// XXX testing
-	lifesec = 30
-	lsp.life = xtime.NewHoldTimer(lifesec, func() { db.expireC <- lsp.lspid })
+	lifetime = 30
+	lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
 	lsp.isOurs = bytes.Equal(lsp.lspid[:clns.SysIDLen], db.sysid[:])
 	// // We aren't locked but this isn't in the DB yet.
 	// if lsp.isOurs {
@@ -498,7 +498,6 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 			} else {
 				// We've now stopped the timer we would have
 				// reset it anyway in updateLSPSegment.
-
 			}
 		}
 	}
@@ -582,20 +581,20 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 	}
 
 	if lsp.life != nil {
-		// Reset the hold timer
-		db.debug("%s: Resetting hold timer for %s", db, lsp)
+		// Reset the hold timer -- XXX are we always supposed to do this?
 		lsp.life.Reset(lifetime)
+		db.debug("%s: Reset hold timer %d for %s", db, lifetime, lsp)
 	} else {
-		db.debug("%s: Resetting hold timer for Purged %s", db, lsp)
 		// We should never see both nil we would have deleted it.
 		if lsp.zeroLife == nil {
-			panic(fmt.Sprintf("WARNING: both life and zero nil for %s", lsp))
+			panic(fmt.Sprintf("WARNING: both life and zeroLife nil for %s", lsp))
 		}
 		// No need to check if we sotpped as we can handle being
 		// called now after update.
 		lsp.zeroLife.Stop()
 		lsp.zeroLife = nil
 		lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
+		db.debug("%s: Reset hold timer for Purged %s", db, lsp)
 	}
 
 	// XXX update refresh timer?
