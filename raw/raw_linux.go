@@ -7,6 +7,7 @@ package raw
 import (
 	"golang.org/x/net/bpf"
 	"net"
+	"os"
 	"syscall"
 	"unsafe"
 )
@@ -59,7 +60,10 @@ func NewInterfaceSocket(ifname string) (IntfSocket, error) {
 		return rv, err
 	}
 
-	err = syscall.BindToDevice(rv.fd, rv.intf.Name)
+	ll := syscall.SockaddrLinklayer{
+		Ifindex: rv.intf.Index,
+	}
+	err = syscall.Bind(rv.fd, &ll)
 	if err != nil {
 		return rv, err
 	}
