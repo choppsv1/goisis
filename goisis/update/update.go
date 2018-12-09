@@ -721,7 +721,10 @@ func (db *DB) runOnce() {
 			lsp.life = nil
 		}
 		db.debug("3) <-expireC %s", lspid)
-		if lsp.zeroLife == nil {
+		if pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:]) == 0 {
+			db.debug("Deleting Zero-SeqNo %s", lsp)
+			delete(db.db, lsp.lspid)
+		} else if lsp.zeroLife == nil {
 			db.debug("4) <-expireC %s", lspid)
 			db.initiatePurgeLSP(lsp)
 		} else {
