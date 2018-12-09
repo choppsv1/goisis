@@ -12,7 +12,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
     # Add a private network between routers
     r.vm.network("private_network", ip: "192.168.11.10")
-    # r.vm.network("private_network", ip: "192.168.12.10")
+    r.vm.network("private_network", ip: "192.168.12.10")
     r.vm.provision :shell, path: "bootstrap-gen.sh"
   end
   config.vm.define "r20" do |r|
@@ -21,8 +21,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     # r.vm.box = "hashicorp/precise32"
 
     # Add a private network between routers
-    # r.vm.network "private_network", ip: "192.168.12.20"
     r.vm.network "private_network", ip: "192.168.13.20"
+    r.vm.network "private_network", ip: "192.168.12.20"
     r.vm.provision :shell, path: "bootstrap-gen.sh"
   end
 end
