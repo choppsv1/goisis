@@ -7,7 +7,6 @@ package raw
 import (
 	"golang.org/x/net/bpf"
 	"net"
-	"os"
 	"syscall"
 	"unsafe"
 )
