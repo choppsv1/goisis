@@ -3,6 +3,8 @@
 //
 // December 28 2017, Christian E. Hopps <chopps@gmail.com>
 //
+// func readPackets():
+//
 // (per-link) hello process <- +-+
 //                             |D|  <-- FrameToPDU <- readPackets (circuit 1 go rtn)
 //  LSP                        |s|   ...

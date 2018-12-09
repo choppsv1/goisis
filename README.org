@@ -9,11 +9,28 @@ written in Go. Runs on Linux, OS X, *BSD.
 
  Yes, this is what I occupy my time with for fun on PTO. :)
 
+** Basic Structure
+Is-IS is broken up into 3 processes by design, the Hello, Update and Decision
+processes. We have moved the update process to a separate sub-package to align
+with this design.
+
+*** No Locks
+The code has no locks. It fully utilizes go's channels to communicate rather
+than share memory.
+
+*** Circuits and Links
+The code calls an interface a "Circuit". A "Link" then is level specific state
+for a Circuit. In particular adjacencies are associated with Links. In the case
+of a LAN Circuit there will be one Link per level. In the case of a
+point-to-point Circuit there will be only a single Link.
+
 ** TODO Missing Items
 *** Hello Process
-    - Implement DIS election
     - Implement P2P interfaces
 *** Update Process
-    - Implement
+    - Own LSP.
 *** Decision Process
     - Implement
+*** Bugs:
+- Zero Age LSPs are not updated.
+
