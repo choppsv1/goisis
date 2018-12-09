@@ -140,6 +140,7 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 func (link *LinkLAN) getKnownSNPA() []net.HardwareAddr {
 	alist := make([]net.HardwareAddr, 0, len(link.srcidMap))
 	for _, a := range link.srcidMap {
+		debug(DbgFPkt, "Sending IIH Add Adj %s", a)
 		if a.State != AdjStateDown {
 			alist = append(alist, a.snpa[:])
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
 )

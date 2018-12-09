@@ -141,6 +141,7 @@ func NewCircuitBase(ifname string, lf clns.LevelFlag, cdb *CircuitDB, updb [2]*u
 
 	cb.sock, err = raw.NewInterfaceSocket(cb.intf.Name)
 	if err != nil {
+		fmt.Printf("Error creating interface: %s\n", err)
 		return nil, err
 	}
 

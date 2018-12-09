@@ -31,6 +31,21 @@ func (mi myint) gofunc(wg *sync.WaitGroup) {
 	wg.Done()
 }
 
+type Bar struct {
+	i int
+}
+
+type Foo struct {
+	myMap map[[2]byte]*Bar
+}
+
+func NewFoo() *Foo {
+	foo := &Foo{
+		myMap: make(map[[2]byte]*Bar),
+	}
+	return foo
+}
+
 func playground() {
 
 	mac1 := clns.HWToSNPA(clns.AllL1IS)
@@ -38,6 +53,11 @@ func playground() {
 
 	// mac2 := clns.HWAddr(clns.AllL1IS).ToSNPA()
 	// fmt.Printf("MAC %v\n", mac2)
+
+	foo1 := NewFoo()
+	foo2 := NewFoo()
+
+	fmt.Printf("Foo1 %p Foo2 %p\n", foo1.myMap, foo2.myMap)
 
 	// var snpe tlv.SNPEntry
 	// fmt.Printf("OffsetOf Lifetime: %u\n", unsafe.Offsetof(snpe.Lifetime))

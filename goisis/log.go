@@ -50,3 +50,7 @@ func debug(flag DbgFlags, format string, a ...interface{}) {
 func logit(format string, a ...interface{}) {
 	logger.Printf(format, a...)
 }
+
+func panicf(format string, a ...interface{}) {
+	logger.Panicf(format, a...)
+}

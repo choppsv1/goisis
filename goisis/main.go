@@ -123,7 +123,7 @@ func main() {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		_, err = cdb.NewCircuit(ifname, GlbISType, updb)
 		if err != nil {
-			panic(fmt.Sprintf("Error creating link: %s\n", err))
+			panicf("Error creating circuit: %s\n", err)
 		}
 	}
 

@@ -101,7 +101,7 @@ func (c *CircuitLAN) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
 		len(frame), c.intf.Name, pdu.dst, pdu.src, eframe.GetTypeLen())
 
 	var llc []byte
-	pdu.payload, llc, err = eframe.ValidateFrame(ourSNPA)
+	pdu.payload, llc, err = eframe.ValidateLLCFrame(ourSNPA)
 	if err != nil {
 		if err == ether.ErrOurFrame(true) {
 			debug(DbgFPkt, "Dropping our own frame")
