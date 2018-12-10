@@ -59,7 +59,10 @@ func NewInterfaceSocket(ifname string) (IntfSocket, error) {
 		return rv, err
 	}
 
-	err = syscall.BindToDevice(rv.fd, rv.intf.Name)
+	ll := syscall.SockaddrLinklayer{
+		Ifindex: rv.intf.Index,
+	}
+	err = syscall.Bind(rv.fd, &ll)
 	if err != nil {
 		return rv, err
 	}

@@ -65,12 +65,19 @@ func main() {
 	}
 
 	// Initialize debug flags.
-	for _, s := range strings.Split(*dbgIDPtr, ",") {
-		flag, ok := FlagNames[s]
-		if !ok {
-			panic(fmt.Sprintf("Unknown debug flag: %s\n", s))
+	if strings.Compare(*dbgIDPtr, "all") == 0 {
+		for fstr := range FlagNames {
+			GlbDebug |= FlagNames[fstr]
 		}
-		GlbDebug |= flag
+	} else {
+		for _, fstr := range strings.Split(*dbgIDPtr, ",") {
+			flag, ok := FlagNames[fstr]
+			if !ok {
+				fmt.Printf("Unknown debug flag: %s\n", fstr)
+				continue
+			}
+			GlbDebug |= flag
+		}
 	}
 
 	// Initialize instance type
@@ -129,7 +136,7 @@ func main() {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		_, err = cdb.NewCircuit(ifname, GlbISType, updb)
 		if err != nil {
-			panic(fmt.Sprintf("Error creating link: %s\n", err))
+			panicf("Error creating circuit: %s\n", err)
 		}
 	}
 

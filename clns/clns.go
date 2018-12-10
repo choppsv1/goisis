@@ -571,3 +571,66 @@ func ValidatePDU(llc, payload []byte, istype, ctype LevelFlag) ([]byte, PDUType,
 
 	return payload, pdutype, nil
 }
+
+//
+// From RFC 1008: 7.2.1
+//
+var MODX = uint16(4102)
+
+// Cksum returns the ISO cksum of the message treating k and k-1 bytes as zero
+// if k > 0.
+func Cksum(msg []byte, k uint16) uint16 {
+	p3 := uint16(len(msg))
+
+	// We can't modify the data so we look for it later while iterating
+	// if k > 0 {
+	// 	msg[k - 1] = 0
+	// 	msg[k] = 0
+	// }
+
+	c0 := uint16(0)
+	c1 := uint16(0)
+	p1 := uint16(0)
+
+	// Outer sum accumulation loop
+	for p1 < p3 {
+		p2 := p1 + MODX
+		if p2 > p3 {
+			p2 = p3
+		}
+		// Inner accumulation loop
+		for p := p1; p < p2; p++ {
+			// if these are the bytes of an embedded cksum
+			if k == 0 || (p != k-1 && p != k) {
+				c0 = c0 + uint16(msg[p])
+			}
+			c1 = c1 + c0
+		}
+		// adjust accumulated sums to MOD 255
+		c0 = c0 % 255
+		c1 = c1 % 255
+		p1 = p2
+	}
+
+	// concat c1 and c0
+	ip := ((c1 & 0xff) << 8) + (c0 & 0xFF)
+	if k == 0 {
+		return ip
+	}
+
+	// iq = ((mlen - k) * c0 - c1) % 255
+	iq := ((p3-(k))*c0 - c1) % 255
+	if iq <= 0 {
+		iq = iq + 255
+	}
+	// mess[k-1] = iq     // Can't modify data
+
+	ir := (510 - c0 - iq)
+	if ir > 255 {
+		ir = ir - 255
+	}
+	// mess[k] = ir // Can't modify data
+
+	// Return in host order
+	return ((iq & 0xFF) << 8) | (ir & 0xFF)
+}

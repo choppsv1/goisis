@@ -82,9 +82,17 @@ func (e ErrOurFrame) Error() string {
 	return fmt.Sprintf("received a frame with our src mac")
 }
 
+// ErrNonLLCFrame indicates that the received Ethernet frame was an
+// non-llc frame (probably an ethertype)
+type ErrNonLLCFrame string
+
+func (e ErrNonLLCFrame) Error() string {
+	return fmt.Sprintf("%s", string(e))
+}
+
 // ValidateFrame checks the Ethernet values and return the payload or an error
 // if something is incorrect.
-func (p Frame) ValidateFrame(ourSNPA map[MAC]bool) ([]byte, []byte, error) {
+func (p Frame) ValidateLLCFrame(ourSNPA map[MAC]bool) ([]byte, []byte, error) {
 	payload := p[HdrEthSize:]
 
 	etype := p.GetTypeLen()
@@ -98,8 +106,9 @@ func (p Frame) ValidateFrame(ourSNPA map[MAC]bool) ([]byte, []byte, error) {
 
 	if etype > 1514 && etype != 0x8870 {
 		// Drop non-LLC that aren't jumbo frames
-		return nil, nil, nil
+		return nil, nil, ErrNonLLCFrame(fmt.Sprintf("non-llc ethertype 0x%x", etype))
 	}
+
 	if etype != len(payload) {
 		return nil, nil, ErrInvalidFrame(fmt.Sprintf("invalid ethernet frame llc len (%d) and payload (%d) mismatch", etype, len(payload)))
 	}

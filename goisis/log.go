@@ -66,3 +66,7 @@ func info(format string, a ...interface{}) {
 func trap(format string, a ...interface{}) {
 	traplogger.Printf(format, a...)
 }
+
+func panicf(format string, a ...interface{}) {
+	logger.Panicf(format, a...)
+}

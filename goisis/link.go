@@ -72,8 +72,8 @@ type LinkLAN struct {
 	iihpkt     chan *RecvPDU
 	disTimer   *time.Timer
 	disElected bool
-	snpaMap    map[[clns.SNPALen]byte]*Adj
-	srcidMap   map[[clns.SysIDLen]byte]*Adj
+	snpaMap    map[clns.SNPA]*Adj
+	srcidMap   map[clns.SystemID]*Adj
 
 	// Update Process
 	updb   *update.DB
@@ -97,11 +97,11 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 		priority: 0, // clns.DefHelloPri,
 		helloInt: clns.DefHelloInt,
 		holdMult: clns.DefHelloMult,
-		expireC:  make(chan clns.SystemID),
-		iihpkt:   make(chan *RecvPDU),
-		snpaMap:  make(map[[clns.SNPALen]byte]*Adj),
-		srcidMap: make(map[[clns.SysIDLen]byte]*Adj),
-		flagsC:   make(chan ChgSxxFlag),
+		expireC:  make(chan clns.SystemID, 10),
+		iihpkt:   make(chan *RecvPDU, 3),
+		snpaMap:  make(map[clns.SNPA]*Adj),
+		srcidMap: make(map[clns.SystemID]*Adj),
+		flagsC:   make(chan ChgSxxFlag, 10),
 		flags:    [2]update.FlagSet{make(update.FlagSet), make(update.FlagSet)},
 	}
 	lanLinkCircuitIDs[li]++
@@ -167,14 +167,13 @@ func (link *LinkLAN) waitFlags() {
 	}
 }
 
-func (link *LinkLAN) gatherFlags() {
-	for {
+func (link *LinkLAN) gatherFlags() uint {
+	for count := uint(0); ; count++ {
 		select {
 		case cf := <-link.flagsC:
 			link.changeFlag(cf.flag, cf.set, &cf.lspid)
 		default:
-			return
-
+			return count
 		}
 	}
 }
@@ -244,9 +243,9 @@ func (link *LinkLAN) sendAnLSP() {
 func (link *LinkLAN) processFlags() {
 	for {
 		link.waitFlags()
-		link.gatherFlags()
+		count := link.gatherFlags() + 1
+		debug(DbgFFlags, "%s Gathered %d flags", link, count)
 		for len(link.flags[SRM]) != 0 || len(link.flags[SSN]) != 0 {
-			link.gatherFlags()
 			link.sendAllPSNP()
 			link.sendAnLSP()
 		}

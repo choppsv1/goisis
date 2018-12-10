@@ -13,6 +13,7 @@
 hostname r${routerid}
 password lab
 enable password lab
+log syslog
 EOF
 
     cat > /etc/quagga/isisd.conf <<EOIF
@@ -28,5 +29,6 @@ router isis ring
     lsp-refresh-interval 60
     max-lsp-lifetime 360
 line vty
+log syslog
 EOIF
     systemctl start isisd || service quagga restart

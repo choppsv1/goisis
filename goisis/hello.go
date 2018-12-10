@@ -103,9 +103,10 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 		case pdu := <-link.iihpkt:
 			rundis = pdu.link.RecvHello(pdu)
 		case srcid := <-link.expireC:
+			debug(DbgFAdj, "Adj for %s on %s expiring.", srcid, link)
 			a := link.srcidMap[srcid]
 			if a == nil {
-				debug(DbgFDIS, "Adj for %s on %s is already gone.", srcid, link)
+				debug(DbgFAdj, "Adj for %s on %s is already gone.", srcid, link)
 				break
 			}
 			// If the adjacency was up then we need to rerun DIS election.
@@ -140,6 +141,7 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 func (link *LinkLAN) getKnownSNPA() []net.HardwareAddr {
 	alist := make([]net.HardwareAddr, 0, len(link.srcidMap))
 	for _, a := range link.srcidMap {
+		debug(DbgFPkt, "Sending IIH Add Adj %s", a)
 		if a.State != AdjStateDown {
 			alist = append(alist, a.snpa[:])
 		}
