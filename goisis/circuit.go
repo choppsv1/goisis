@@ -50,13 +50,13 @@ var clnsTemplate = []uint8{
 //
 type Circuit interface {
 	IsP2P() bool
-	ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex)
+	ChgFlag(update.SxxFlag, *clns.LSPID, bool, clns.LIndex)
 	ClosePDU(ether.Frame, []byte) ether.Frame
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
+	Name() string
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
 	RecvHello(pdu *RecvPDU)
-	SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex)
 }
 
 // -----
@@ -80,6 +80,41 @@ type RecvPDU struct {
 	link Link
 	src  net.HardwareAddr
 	dst  net.HardwareAddr
+}
+
+// NewCircuitDB allocate and initialize a new circuit database.
+func NewCircuitDB() *CircuitDB {
+	cdb := &CircuitDB{
+		circuits: make(map[string]Circuit),
+	}
+
+	// go cdb.processChgFlags()
+
+	return cdb
+}
+
+// NewCircuit creates a circuit enabled for the given levels.
+func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*update.DB) (*CircuitLAN, error) {
+	cb, err := NewCircuitBase(ifname,
+		lf,
+		cdb,
+		updb,
+		GlbQuit)
+	if err != nil {
+		return nil, err
+	}
+	// Check interface type and allocate LAN or P2P
+	cll, err := NewCircuitLAN(cb, lf)
+	cdb.circuits[ifname] = cll
+
+	return cll, err
+}
+
+//
+// CircuitDB is a database of circuits we run on.
+//
+type CircuitDB struct {
+	circuits map[string]Circuit
 }
 
 //
@@ -170,6 +205,10 @@ func (c *CircuitLAN) String() string {
 	return fmt.Sprintf("CircuitLAN(%s)", c.CircuitBase)
 }
 
+func (c *CircuitLAN) Name() string {
+	return c.intf.Name
+}
+
 // getOurSNPA returns the SNPA for this circuit
 func (c *CircuitLAN) getOurSNPA() net.HardwareAddr {
 	return c.CircuitBase.intf.HardwareAddr
@@ -215,7 +254,9 @@ func NewCircuitLAN(cb *CircuitBase, lf clns.LevelFlag) (*CircuitLAN, error) {
 	for l := clns.Level(1); l <= 2; l++ {
 		if lf.IsLevelEnabled(l) {
 			li := l.ToIndex()
-			c.levlink[li] = NewLinkLAN(c, li, cb.updb[li], cb.quit)
+			updb := cb.updb[li]
+			c.levlink[li] = NewLinkLAN(c, li, updb, cb.quit)
+			updb.AddCircuit(c)
 		}
 	}
 
@@ -300,16 +341,12 @@ func (c *CircuitLAN) RecvHello(pdu *RecvPDU) {
 
 }
 
-// SetFlag sets the given flag for the given LSPID for the given level (li)
-func (c *CircuitLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
-	debug(DbgFFlags, "%s: Set %s %s %s", c, flag, *lspid, li.ToLevel())
-	c.levlink[li].SetFlag(flag, lspid)
-}
-
-// ClearFlag sets the given flag for the given LSPID for the given level (li)
-func (c *CircuitLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID, li clns.LIndex) {
-	debug(DbgFFlags, "%s: Clear %s %s %s", c, flag, *lspid, li.ToLevel())
-	c.levlink[li].ClearFlag(flag, lspid)
+func (c *CircuitLAN) ChgFlag(flag update.SxxFlag, lspid *clns.LSPID, set bool, li clns.LIndex) {
+	c.levlink[li].flagsC <- ChgSxxFlag{
+		set:   set,
+		flag:  flag,
+		lspid: *lspid,
+	}
 }
 
 func (c *CircuitLAN) IsP2P() bool {

@@ -295,7 +295,10 @@ func Slicer(b []byte, start int, length int) []byte {
 func (tlvs TLVMap) SNPEntryValues() ([][]byte, error) {
 	count := 0
 	for _, b := range tlvs[TypeSNPEntries] {
-		l := len(b)
+		_, l, _, err := GetTLV(b)
+		if err != nil {
+			return nil, err
+		}
 		if l%SNPEntSize != 0 {
 			return nil, ErrTLVSpaceCorrupt(
 				fmt.Sprintf("SNP Entries TLV not multiple of %d", SNPEntSize))
@@ -305,13 +308,17 @@ func (tlvs TLVMap) SNPEntryValues() ([][]byte, error) {
 	entries := make([][]byte, count)
 	ei := 0
 	for _, b := range tlvs[TypeSNPEntries] {
+		_, l, v, err := GetTLV(b)
+		if err != nil {
+			panic("err where none before")
+		}
 		// XXX this can be done faster using unsafe and just
 		// constructing a new map with the backing array :)
-		bi := 0
-		count = len(b) / SNPEntSize
+		vi := 0
+		count = l / SNPEntSize
 		for i := 0; i < count; i++ {
-			entries[ei] = Slicer(b, bi, SNPEntSize)
-			bi += SNPEntSize
+			entries[ei] = Slicer(v, vi, SNPEntSize)
+			vi += SNPEntSize
 			ei++
 		}
 	}

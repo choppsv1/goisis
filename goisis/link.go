@@ -26,9 +26,9 @@ var lanLinkCircuitIDs = [2]byte{0, 0}
 // Link represents level dependent operations on a circuit.
 //
 type Link interface {
-	ClearFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
+	// ClearFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
 	IsP2P() bool
-	SetFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
+	// SetFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
 	RecvHello(*RecvPDU) bool
 	GetOurSNPA() net.HardwareAddr
 	ExpireAdj(clns.SystemID)
@@ -58,7 +58,6 @@ type LinkLAN struct {
 	circuit *CircuitLAN
 	l       clns.Level
 	li      clns.LIndex // level - 1 for array indexing
-	updb    *update.DB
 
 	// Hello Process
 	helloInt  uint
@@ -77,7 +76,7 @@ type LinkLAN struct {
 	srcidMap   map[[clns.SysIDLen]byte]*Adj
 
 	// Update Process
-	lspdb  *update.DB
+	updb   *update.DB
 	flagsC chan ChgSxxFlag
 	flags  [2]update.FlagSet
 }
@@ -104,7 +103,6 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 		srcidMap: make(map[[clns.SysIDLen]byte]*Adj),
 		flagsC:   make(chan ChgSxxFlag),
 		flags:    [2]update.FlagSet{make(update.FlagSet), make(update.FlagSet)},
-		lspdb:    c.updb[li],
 	}
 	lanLinkCircuitIDs[li]++
 	link.lclCircID = lanLinkCircuitIDs[li]
@@ -149,24 +147,6 @@ func (link *LinkLAN) ExpireAdj(sysid clns.SystemID) {
 
 var SRM = update.SRM
 var SSN = update.SSN
-
-// ClearFlag clears a flag for lspid on link.
-func (link *LinkLAN) ClearFlag(flag update.SxxFlag, lspid *clns.LSPID) {
-	link.flagsC <- ChgSxxFlag{
-		set:   false,
-		flag:  flag,
-		lspid: *lspid,
-	}
-}
-
-// SetFlag sets a flag for lspid on link and schedules a send
-func (link *LinkLAN) SetFlag(flag update.SxxFlag, lspid *clns.LSPID) {
-	link.flagsC <- ChgSxxFlag{
-		set:   true,
-		flag:  flag,
-		lspid: *lspid,
-	}
-}
 
 func (link *LinkLAN) changeFlag(flag update.SxxFlag, set bool, lspid *clns.LSPID) {
 	if set {
@@ -213,7 +193,7 @@ func (link *LinkLAN) fillSNP(tlvp tlv.Data) tlv.Data {
 			_ = err.(tlv.ErrNoSpace)
 			break
 		}
-		if ok := link.lspdb.CopyLSPSNP(&lspid, p); ok {
+		if ok := link.updb.CopyLSPSNP(&lspid, p); ok {
 			link.changeFlag(SSN, false, &lspid)
 		} else {
 			debug(DbgFFlags, "%s: LSP SSN with no LSP for %s", link, lspid)
@@ -251,7 +231,7 @@ func (link *LinkLAN) sendAnLSP() {
 	for lspid := range link.flags[SRM] {
 		link.changeFlag(SRM, false, &lspid)
 		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.li])
-		if l := link.lspdb.CopyLSPPayload(&lspid, payload); l != 0 {
+		if l := link.updb.CopyLSPPayload(&lspid, payload); l != 0 {
 			debug(DbgFFlags, "%s SENDING LSP %s", link, lspid)
 			link.circuit.outpkt <- CloseFrame(etherp, l)
 			break

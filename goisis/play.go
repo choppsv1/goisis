@@ -45,11 +45,14 @@ func playground() {
 	// fmt.Printf("OffsetOf SeqNo: %u\n", unsafe.Offsetof(snpe.SeqNo))
 	// fmt.Printf("OffsetOf Chksum: %u\n", unsafe.Offsetof(snpe.Chksum))
 
+	fmt.Println(dlogger.Prefix())
+	fmt.Println(logger.Prefix())
+
 	t := time.AfterFunc(10*time.Second, func() {})
-	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
-	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Reset(10*time.Second))
-	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
-	fmt.Printf("Timer %p.Stop() == %s\n", t, t.Stop())
+	fmt.Printf("Timer %p.Stop() == %v\n", t, t.Stop())
+	fmt.Printf("Timer %p.Stop() == %v\n", t, t.Reset(10*time.Second))
+	fmt.Printf("Timer %p.Stop() == %v\n", t, t.Stop())
+	fmt.Printf("Timer %p.Stop() == %v\n", t, t.Stop())
 
 	m := make(map[int]int)
 	v := m[0]

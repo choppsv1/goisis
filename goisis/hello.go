@@ -117,7 +117,9 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 			disWaiting = false
 			rundis = true
 		case <-tickC:
+			debug(DbgFPkt, "%s: IIH Tick Start", link)
 			sendLANHello(link)
+			debug(DbgFPkt, "%s: IIH Tick Done", link)
 		}
 
 		if rundis {
@@ -334,12 +336,12 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 		// Expect 1 and only 1 Area TLV
 		atlv := tlvs[tlv.TypeAreaAddrs]
 		if len(atlv) != 1 {
-			logit(fmt.Sprintf("INFO: areaMismatch: Incorrect area TLV count: %d", len(atlv)))
+			trap("areaMismatch: Incorrect area TLV count: %d", len(atlv))
 			return rundis
 		}
 		addrs, err := atlv[0].AreaAddrsValue()
 		if err != nil {
-			logit(fmt.Sprintf("TRAP areaMismatch: Area TLV error: %s", err))
+			trap("areaMismatch: Area TLV error: %s", err)
 			return rundis
 		}
 
@@ -352,7 +354,7 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 			}
 		}
 		if !matched {
-			logit(fmt.Sprintf("TRAP areaMismatch: no matching areas"))
+			trap("TRAP areaMismatch: no matching areas")
 			return rundis
 		}
 	}
@@ -433,8 +435,7 @@ func (link *LinkLAN) disFindBest() (bool, *Adj) {
 
 func (link *LinkLAN) disSelfElect() {
 	// Always let the update process know.
-	link.updb.SetDIS(link.lclCircID, true)
-
+	link.updb.ElectDIS(link.circuit, link.lclCircID)
 	if link.disElected {
 		return
 	}
@@ -445,8 +446,7 @@ func (link *LinkLAN) disSelfElect() {
 
 func (link *LinkLAN) disSelfResign() {
 	// Always let the update process know.
-	link.updb.SetDIS(link.lclCircID, false)
-
+	link.updb.ResignDIS(link.lclCircID)
 	if !link.disElected {
 		return
 	}

@@ -1,6 +1,7 @@
 package clns
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"github.com/choppsv1/goisis/ether"
@@ -404,6 +405,20 @@ func (l LSPID) String() string {
 // LSPIDString prints a LSPID given a generic byte slice.
 func LSPIDString(lspid []byte) string {
 	return ISOString(lspid[:LSPIDLen], true)
+}
+
+type LSPIDArray []LSPID
+
+func (la LSPIDArray) Len() int {
+	return len(la)
+}
+
+func (la LSPIDArray) Less(i, j int) bool {
+	return bytes.Compare(la[i][:], la[j][:]) < 0
+}
+
+func (la LSPIDArray) Swap(i, j int) {
+	la[i], la[j] = la[j], la[i]
 }
 
 //

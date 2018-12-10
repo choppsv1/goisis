@@ -26,8 +26,11 @@ var GlbAreaID []byte
 // var GlbNLPID = []byte{clns.NLPIDIPv4}
 var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 
-// GlbDebug are the enable debug.
+// GlbDebug are the enabled debugs.
 var GlbDebug DbgFlags
+
+// GlbTrace are the enabled traces.
+var GlbTrace DbgFlags
 
 // GlbQuit is a channel to signal go routines should end
 var GlbQuit = make(chan bool)
@@ -43,6 +46,8 @@ func main() {
 		"strsep list of debug flags: adj,dis,flags,packet,update")
 	isTypePtr := flag.String("istype", "l-1", "l-1, l-1-2, l-2-only")
 	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
+	traceIDPtr := flag.String("trace", "",
+		"strsep list of debug flags: adj,dis,flags,packet,update")
 	flag.Parse()
 
 	if *playPtr {
@@ -50,12 +55,20 @@ func main() {
 		return
 	}
 
-	// Initialize debug flags.
-	for _, fstr := range strings.Split(*dbgIDPtr, ",") {
-		flag, ok := FlagNames[fstr]
+	// Initialize trace flags.
+	for _, s := range strings.Split(*traceIDPtr, ",") {
+		flag, ok := FlagNames[s]
 		if !ok {
-			fmt.Printf("Unknown debug flag: %s\n", fstr)
-			continue
+			panic(fmt.Sprintf("Unknown trace flag: %s\n", s))
+		}
+		GlbTrace |= flag
+	}
+
+	// Initialize debug flags.
+	for _, s := range strings.Split(*dbgIDPtr, ",") {
+		flag, ok := FlagNames[s]
+		if !ok {
+			panic(fmt.Sprintf("Unknown debug flag: %s\n", s))
 		}
 		GlbDebug |= flag
 	}
@@ -90,10 +103,6 @@ func main() {
 		fmt.Printf("System ID: %s\n", GlbSystemID)
 	}
 
-	// Initialize Circuit DB
-
-	cdb := NewCircuitDB()
-
 	// Initialize Update Process
 
 	var updb [2]*update.DB
@@ -106,12 +115,15 @@ func main() {
 	for l := clns.Level(1); l <= 2; l++ {
 		if GlbISType.IsLevelEnabled(l) {
 			li := l.ToIndex()
-			updb[li] = update.NewDB(GlbSystemID[:], l, cdb.flagsC, dbdebug)
+			updb[li] = update.NewDB(GlbSystemID[:], l, dbdebug)
 		}
 	}
 
-	// Add interfaces
+	// Initialize Circuit DB
 
+	cdb := NewCircuitDB()
+
+	// Add interfaces
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
 	for _, ifname := range strings.Fields(*iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
@@ -121,9 +133,9 @@ func main() {
 		}
 	}
 
-	ticker := time.NewTicker(time.Second * 10)
+	ticker := time.NewTicker(time.Second * 120)
 	for _ = range ticker.C {
-		fmt.Printf("Keep Alive\n")
+		info("Keep Alive\n")
 	}
 
 	close(GlbQuit)

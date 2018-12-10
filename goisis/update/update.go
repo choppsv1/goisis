@@ -8,6 +8,7 @@ import (
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
+	"sort"
 )
 
 // ==========
@@ -17,6 +18,8 @@ import (
 // Circuit is the interface that update requires for circuits.
 type Circuit interface {
 	IsP2P() bool
+	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
+	Name() string
 }
 
 // =====
@@ -25,26 +28,32 @@ type Circuit interface {
 
 // DB holds all LSP for a given level.
 type DB struct {
-	sysid   clns.SystemID
-	dis     [256]Trit
-	disC    chan chgDIS
-	pduC    chan inputPDU
-	flagsC  chan<- ChgSxxFlag
-	getlspC chan inputGetLSP
-	getsnpC chan inputGetSNP
-	expireC chan clns.LSPID
-	li      clns.LIndex
-	db      map[clns.LSPID]*lspSegment
-	debug   func(string, ...interface{})
+	sysid    clns.SystemID // change to public as immutable
+	li       clns.LIndex   // change to public as immutable
+	circuits map[string]Circuit
+	dis      map[uint8]Circuit
+	chgCC    chan chgCircuit
+	chgDISC  chan chgDIS
+	expireC  chan clns.LSPID
+	getlspC  chan inputGetLSP
+	getsnpC  chan inputGetSNP
+	pduC     chan inputPDU
+	db       map[clns.LSPID]*lspSegment
+	debug    func(string, ...interface{})
 }
 
 func (db *DB) String() string {
 	return fmt.Sprintf("UpdateDB(%s)", db.li)
 }
 
+type chgCircuit struct {
+	c    Circuit // nil for remove.
+	name string
+}
+
 type chgDIS struct {
-	set bool  // set or clear
-	cid uint8 // circuit ID
+	c   Circuit // nil for resign.
+	cid uint8   // circuit ID
 }
 
 // ErrIIH is a general error in IIH packet processing
@@ -52,27 +61,6 @@ type ErrLSP string
 
 func (e ErrLSP) Error() string {
 	return fmt.Sprintf("ErrLSP: %s", string(e))
-}
-
-type Trit int8
-
-func (trit Trit) String() string {
-	switch trit {
-	case -1:
-		return "False"
-	case 0:
-		return "Unkonwn"
-	case 1:
-		return "True"
-	default:
-		panic("invalid trit")
-	}
-}
-func BoolToTrit(b bool) Trit {
-	if b {
-		return 1
-	}
-	return -1
 }
 
 // inputPDU is the PDU input to the udpate process
@@ -129,16 +117,19 @@ func (result lspCompareResult) String() string {
 }
 
 // NewDB returns a new Update Process LSP database
-func NewDB(sysid []byte, l clns.Level, flagsC chan<- ChgSxxFlag, debug func(string, ...interface{})) *DB {
+func NewDB(sysid []byte, l clns.Level, debug func(string, ...interface{})) *DB {
 	db := &DB{
-		debug:   debug,
-		li:      l.ToIndex(),
-		flagsC:  flagsC,
-		db:      make(map[clns.LSPID]*lspSegment),
-		pduC:    make(chan inputPDU),
-		getlspC: make(chan inputGetLSP),
-		getsnpC: make(chan inputGetSNP),
-		expireC: make(chan clns.LSPID),
+		circuits: make(map[string]Circuit),
+		chgCC:    make(chan chgCircuit),
+		chgDISC:  make(chan chgDIS),
+		debug:    debug,
+		dis:      make(map[uint8]Circuit),
+		db:       make(map[clns.LSPID]*lspSegment),
+		expireC:  make(chan clns.LSPID),
+		li:       l.ToIndex(),
+		getlspC:  make(chan inputGetLSP),
+		getsnpC:  make(chan inputGetSNP),
+		pduC:     make(chan inputPDU),
 	}
 	copy(db.sysid[:], sysid)
 	go db.Run()
@@ -214,9 +205,22 @@ func (db *DB) InputSNP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 	return nil
 }
 
+func (db *DB) AddCircuit(c Circuit) {
+	db.chgCC <- chgCircuit{c: c, name: c.Name()}
+}
+
+func (db *DB) RemoveCircuit(c Circuit) {
+	db.chgCC <- chgCircuit{c: nil, name: c.Name()}
+}
+
 // SetDIS sets or clears if we are DIS for the circuit ID.
-func (db *DB) SetDIS(cid uint8, set bool) {
-	db.disC <- chgDIS{set, cid}
+func (db *DB) ElectDIS(c Circuit, cid uint8) {
+	db.chgDISC <- chgDIS{c, cid}
+}
+
+// ResignDIS inform UP that we have resigned DIS for the circuit ID.
+func (db *DB) ResignDIS(cid uint8) {
+	db.chgDISC <- chgDIS{nil, cid}
 }
 
 // CopyLSPPayload copies the LSP payload buffer for sending if found and returns
@@ -254,22 +258,30 @@ func (lsp *lspSegment) String() string {
 
 // SetAllFlag sets flag for LSPID on all circuits but 'not' for updb level.
 func (db *DB) setAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
-	db.flagsC <- ChgSxxFlag{flag, db.li, true, true, not, *lspid}
+	for _, c := range db.circuits {
+		if c != not {
+			c.ChgFlag(flag, lspid, true, db.li)
+		}
+	}
 }
 
 // ClearAllFlag clears flag for LSPID on all circuits but 'not' for updb level.
 func (db *DB) clearAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
-	db.flagsC <- ChgSxxFlag{flag, db.li, false, true, not, *lspid}
+	for _, c := range db.circuits {
+		if c != not {
+			c.ChgFlag(flag, lspid, false, db.li)
+		}
+	}
 }
 
 // SetFlag sets flag for LSPID on circuit for the updb level.
 func (db *DB) setFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
-	db.flagsC <- ChgSxxFlag{flag, db.li, true, false, c, *lspid}
+	c.ChgFlag(flag, lspid, true, db.li)
 }
 
 // ClearFlag clears flag for LSPID on circuit for the updb level.
 func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
-	db.flagsC <- ChgSxxFlag{flag, db.li, false, false, c, *lspid}
+	c.ChgFlag(flag, lspid, false, db.li)
 }
 
 // newLSPSegment creates a new lspSegment struct
@@ -329,7 +341,7 @@ func (lsp *lspSegment) getSeqNo() uint32 {
 func (lsp *lspSegment) getUpdLifetime() uint16 {
 	if lsp.life == nil {
 		if pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:]) != 0 {
-			panic("Invaild non-zero life with no holdtimer")
+			panic("Invalid non-zero life with no holdtimer")
 		}
 		return 0
 	}
@@ -380,16 +392,15 @@ func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
 
 // initiatePurgeLSP initiates a purge of an LSPSegment due to lifetime running
 // to zero.
-func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
+func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	var zeroMaxAge uint16
 
 	// If we still have a timer still stop it if we can.
 	if lsp.life == nil {
 		zeroMaxAge = clns.ZeroMaxAge
 	} else {
-		if !lsp.life.Stop() {
+		if !fromTimer && !lsp.life.Stop() {
 			// Can't stop the timer we will be called again.
-			// XXX we are hitting this but then not purging!
 			db.debug("%s: Can't stop timer for %s let it happen", db, lsp)
 			return
 		}
@@ -399,11 +410,12 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 	}
 
 	// Update the lifetime to zero if it wasn't already.
-	pkt.PutUInt16(lsp.hdr[:clns.HdrLSPLifetime], 0)
+
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], 0)
 	db.debug("%s: Lifetime for %s expired, purging.", db, lsp)
 
 	if lsp.zeroLife != nil {
-		panic("Initiating a purge on a purged LSP")
+		panic("Initiating a purge on a purged LSP.")
 	}
 	lsp.zeroLife = xtime.NewHoldTimer(zeroMaxAge,
 		func() { db.expireC <- lsp.lspid })
@@ -418,7 +430,9 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment) {
 
 	// b) Retain only LSP header. XXX we need more space for auth and purge tlv
 	pdulen := uint16(clns.HdrCLNSSize + clns.HdrLSPSize)
+	db.debug("Shrinking lsp.payload %d:%d to %d", len(lsp.payload), cap(lsp.payload), pdulen)
 	lsp.payload = lsp.payload[:pdulen]
+	db.debug("Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
 }
@@ -448,8 +462,9 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 		if pnid == 0 {
 			unsupported = false // always support non-pnode LSP
 		} else {
-			unsupported = lsp == nil || db.dis[pnid] <= 0
-			if db.dis[pnid] == 0 {
+			c, set := db.dis[pnid]
+			unsupported = lsp == nil || c == nil
+			if !set {
 				// We haven't decided who is DIS yet. We may not
 				// want to purge until we have.
 				// XXX
@@ -468,7 +483,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 				// Create LSP and then force purge.
 				lsp := db.newLSPSegment(payload, tlvs)
 				// consolidate or if we need to leave for acks
-				db.initiatePurgeLSP(lsp)
+				db.initiatePurgeLSP(lsp, false)
 				return
 			}
 		}
@@ -672,19 +687,56 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 		return
 	}
 	// 7.3.15.2.c Set SRM for all LSP we have that were not mentioned.
-	// XXX
+
+	// Get sorted list of LSPIDs we have
+	keys := make(clns.LSPIDArray, 0, len(db.db))
+	for k := range db.db {
+		keys = append(keys, k)
+	}
+	sort.Sort(keys)
+
+	hdr := payload[clns.HdrCLNSSize:]
+	startid := Slicer(hdr, clns.HdrCSNPStartLSPID, clns.LSPIDLen)
+	endid := Slicer(hdr, clns.HdrCSNPStartLSPID, clns.LSPIDLen)
+	for _, lspid := range keys {
+		if bytes.Compare(lspid[:], startid) < 0 {
+			continue
+		}
+		if bytes.Compare(lspid[:], endid) > 0 {
+			break
+		}
+		if _, ok := mentioned[lspid]; !ok {
+			lsp := db.db[lspid]
+			if lsp.getSeqNo() != 0 && lsp.getUpdLifetime() != 0 {
+				db.setFlag(SRM, &lspid, c)
+			}
+		}
+	}
+
 }
 
 func (db *DB) runOnce() {
 	select {
-	case in := <-db.disC:
-		if db.dis[in.cid] == BoolToTrit(in.set) {
+	case in := <-db.chgCC:
+		if in.c != nil {
+			db.circuits[in.name] = in.c
+		} else {
+			delete(db.circuits, in.name)
+		}
+	case in := <-db.chgDISC:
+		c := db.dis[in.cid]
+		db.dis[in.cid] = in.c
+		if c == in.c {
 			break
 		}
-		db.debug("%s: DIS Change for %d to %d", db, in.cid, in.set)
-		db.dis[in.cid] = BoolToTrit(in.set)
+		elected := in.c != nil
+		if elected {
+			c := in.c
+			db.debug("%s: Elected DIS on %s", db, c.Name())
+		} else {
+			db.debug("%s: Resigned DIS on %s", db, c.Name())
+		}
 		// XXX Originate or Purge PNode.
-
 	case in := <-db.pduC:
 		switch in.pdutype {
 		case clns.PDUTypeLSPL1, clns.PDUTypeLSPL2:
@@ -717,7 +769,7 @@ func (db *DB) runOnce() {
 		db.debug("3) <-expireC %s", lspid)
 		if lsp.zeroLife == nil {
 			db.debug("4) <-expireC %s", lspid)
-			db.initiatePurgeLSP(lsp)
+			db.initiatePurgeLSP(lsp, true)
 		} else {
 			db.debug("5) <-expireC %s", lspid)
 			// Purge complete
