@@ -249,7 +249,7 @@ func (lsp *lspSegment) String() string {
 	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v cksum:%#04x)",
 		s,
 		lsp.getSeqNo(),
-		lsp.getUpdLifetime(),
+		lsp.checkLifetime(),
 		lsp.getCksum())
 }
 
@@ -288,6 +288,13 @@ func Slicer(b []byte, start int, length int) []byte {
 
 func (lsp *lspSegment) getSeqNo() uint32 {
 	return pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:])
+}
+
+func (lsp *lspSegment) checkLifetime() uint16 {
+	if lsp.life == nil {
+		return 0
+	}
+	return lsp.life.Until()
 }
 
 func (lsp *lspSegment) getUpdLifetime() uint16 {
@@ -709,17 +716,19 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 		if bytes.Compare(lspid[:], endid) > 0 {
 			break
 		}
-		if lsp.getSeqNo() == 0 {
-			db.debug("%s: CSNP: Skipping zero seqno: LSPID: %s", db, lspid)
-			continue
-		}
-		if lsp.life == nil || lsp.life.Until() == 0 {
-			db.debug("%s: CSNP: Skipping zero lifetime: LSPID: %s", db, lspid)
-			continue
-		}
 		_, present := mentioned[lspid]
 		if !present {
+			lsp := db.db[lspid]
+
 			db.debug("%s: CSNP: Missing %s", db, lsp)
+			if lsp.getSeqNo() == 0 {
+				db.debug("%s: CSNP: Skipping zero seqno: LSPID: %s", db, lspid)
+				continue
+			}
+			if lsp.checkLifetime() == 0 {
+				db.debug("%s: CSNP: Skipping zero lifetime: LSPID: %s", db, lspid)
+				continue
+			}
 			db.setFlag(SRM, &lspid, c)
 		}
 	}
@@ -752,7 +761,7 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 		delete(db.db, lsp.lspid)
 	} else if lsp.zeroLife == nil {
 		db.debug("4) <-expireC %s", lspid)
-		db.initiatePurgeLSP(lsp)
+		db.initiatePurgeLSP(lsp, true)
 	} else {
 		db.debug("5) <-expireC %s", lspid)
 		// Purge complete
@@ -815,7 +824,7 @@ func (db *DB) handleChgDISC(in chgDIS) {
 	c := db.dis[in.cid]
 	db.dis[in.cid] = in.c
 	if c == in.c {
-		break
+		return
 	}
 	elected := in.c != nil
 	if elected {
