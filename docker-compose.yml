@@ -1,0 +1,47 @@
+version: "2.1"
+
+services:
+  isis50:
+    image: choppsv1/isisd
+    cap_add: [ "NET_ADMIN", "NET_RAW", "SYS_ADMIN" ]
+    sysctls: [ "net.ipv6.conf.all.forwarding=1" ]
+    networks:
+      net15:
+        ipv4_address: 192.168.15.50
+  isis60:
+    image: choppsv1/isisd
+    cap_add: [ "NET_ADMIN", "NET_RAW", "SYS_ADMIN" ]
+    sysctls: [ "net.ipv6.conf.all.forwarding=1" ]
+    networks:
+      net16:
+        ipv4_address: 192.168.16.60
+  isis70:
+    image: choppsv1/isisd
+    cap_add: [ "NET_ADMIN", "NET_RAW", "SYS_ADMIN" ]
+    sysctls: [ "net.ipv6.conf.all.forwarding=1" ]
+    networks:
+      net17:
+        ipv4_address: 192.168.17.70
+
+networks:
+  net15:
+    driver: bridge
+    # enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 192.168.15.0/24
+          gateway: 192.168.15.1
+  net16:
+    driver: bridge
+    # enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 192.168.16.0/24
+          gateway: 192.168.16.1
+  net17:
+    driver: bridge
+    # enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 192.168.17.0/24
+          gateway: 192.168.17.1

@@ -1,0 +1,8 @@
+FROM ubuntu:18.04
+
+RUN apt-get update -y && apt-get upgrade -y && \
+    apt-get install -y quagga quagga-doc \
+        net-tools
+
+COPY run-isisd.sh /etc/
+ENTRYPOINT [ "/etc/run-isisd.sh" ]
