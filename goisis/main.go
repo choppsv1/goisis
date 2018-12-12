@@ -43,11 +43,11 @@ func main() {
 	playPtr := flag.Bool("play", false, "run the playground")
 	areaIDPtr := flag.String("area", "00", "area of this instance")
 	dbgIDPtr := flag.String("debug", "",
-		"strsep list of debug flags: adj,dis,flags,packet,update")
+		"strsep list of debug flags: all or adj,dis,flags,packet,update")
 	isTypePtr := flag.String("istype", "l-1", "l-1, l-1-2, l-2-only")
 	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
 	traceIDPtr := flag.String("trace", "",
-		"strsep list of debug flags: adj,dis,flags,packet,update")
+		"strsep list of debug flags: all or adj,dis,flags,packet,update")
 	flag.Parse()
 
 	if *playPtr {
@@ -56,24 +56,31 @@ func main() {
 	}
 
 	// Initialize trace flags.
-	for _, s := range strings.Split(*traceIDPtr, ",") {
-		flag, ok := FlagNames[s]
-		if !ok {
-			panic(fmt.Sprintf("Unknown trace flag: %s\n", s))
+	if strings.Compare(*traceIDPtr, "all") == 0 {
+		for fstr := range FlagNames {
+			GlbTrace |= FlagNames[fstr]
 		}
-		GlbTrace |= flag
+	} else {
+		for _, s := range strings.Split(*traceIDPtr, ",") {
+			flag, ok := FlagNames[s]
+			if !ok {
+				fmt.Printf("Unknown trace flag: %s\n", s)
+				continue
+			}
+			GlbTrace |= flag
+		}
 	}
 
 	// Initialize debug flags.
 	if strings.Compare(*dbgIDPtr, "all") == 0 {
-		for fstr := range FlagNames {
-			GlbDebug |= FlagNames[fstr]
+		for s := range FlagNames {
+			GlbDebug |= FlagNames[s]
 		}
 	} else {
-		for _, fstr := range strings.Split(*dbgIDPtr, ",") {
-			flag, ok := FlagNames[fstr]
+		for _, s := range strings.Split(*dbgIDPtr, ",") {
+			flag, ok := FlagNames[s]
 			if !ok {
-				fmt.Printf("Unknown debug flag: %s\n", fstr)
+				fmt.Printf("Unknown debug flag: %s\n", s)
 				continue
 			}
 			GlbDebug |= flag
