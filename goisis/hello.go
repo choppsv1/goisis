@@ -164,6 +164,7 @@ func sendLANHello(link *LinkLAN) error {
 	// XXX we want the API to return payload here and later we convert frame
 	// in close so that we aren't dependent on ethernet
 	etherp, _, iihp, endp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.li])
+	bt := tlv.NewSingleBufferTrack(endp)
 
 	// ----------
 	// IIH Header
@@ -181,37 +182,35 @@ func sendLANHello(link *LinkLAN) error {
 	// --------
 
 	if link.l == 1 {
-		endp, err = tlv.AddArea(endp, GlbAreaID)
-		if err != nil {
+		if err = bt.AddAreas(GlbAreaIDs); err != nil {
 			debug(DbgFPkt, "Error adding area TLV: %s", err)
 			return err
 		}
 	}
 
-	endp, err = tlv.AddNLPID(endp, GlbNLPID)
-	if err != nil {
+	if err = bt.AddNLPID(GlbNLPID); err != nil {
 		debug(DbgFPkt, "Error adding NLPID TLV: %s", err)
 		return err
 	}
 
 	if len(link.circuit.v4addrs) != 0 {
-		endp, err = tlv.AddIntfAddrs(endp, link.circuit.v4addrs)
-		if err != nil {
+		if err = bt.AddIntfAddrs(link.circuit.v4addrs); err != nil {
 			return err
 		}
 	}
 	if len(link.circuit.v6addrs) != 0 {
-		endp, err = tlv.AddIntfAddrs(endp, link.circuit.v6addrs)
-		if err != nil {
+		if err = bt.AddIntfAddrs(link.circuit.v6addrs); err != nil {
 			return err
 		}
 	}
 
-	endp, err = tlv.AddAdjSNPA(endp, link.getKnownSNPA())
-	if err != nil {
+	if err = bt.AddAdjSNPA(link.getKnownSNPA()); err != nil {
 		debug(DbgFPkt, "Error Adding SNPA: %s", err)
 		return err
 	}
+
+	b := bt.Close()[0]
+	endp = b.Endp
 
 	// Pad to MTU
 	for cap(endp) > 1 {
@@ -349,10 +348,13 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 
 		// ISO10589 8.4.2.2.a: Look for our area in TLV.
 		matched := false
+	FOUND:
 		for _, addr := range addrs {
-			if bytes.Equal(GlbAreaID, addr) {
-				matched = true
-				break
+			for _, area := range GlbAreaIDs {
+				if bytes.Equal(area, addr) {
+					matched = true
+					break FOUND
+				}
 			}
 		}
 		if !matched {

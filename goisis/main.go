@@ -19,8 +19,8 @@ var GlbISType clns.LevelFlag
 // GlbSystemID is the system ID of this IS-IS instance
 var GlbSystemID []byte
 
-// GlbAreaID is the area this IS-IS instance is in.
-var GlbAreaID []byte
+// GlbAreaIDs is the slice of our area IDs
+var GlbAreaIDs [][]byte
 
 // GlbNLPID holds an array of the NLPID that we support
 // var GlbNLPID = []byte{clns.NLPIDIPv4}
@@ -34,6 +34,15 @@ var GlbTrace DbgFlags
 
 // GlbQuit is a channel to signal go routines should end
 var GlbQuit = make(chan bool)
+
+func splitArg(argp *string) []string {
+	if argp == nil {
+		return nil
+	}
+	return strings.FieldsFunc(*argp, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ','
+	})
+}
 
 func main() {
 	var err error
@@ -61,7 +70,7 @@ func main() {
 			GlbTrace |= FlagNames[fstr]
 		}
 	} else {
-		for _, s := range strings.Split(*traceIDPtr, ",") {
+		for _, s := range splitArg(traceIDPtr) {
 			flag, ok := FlagNames[s]
 			if !ok {
 				fmt.Printf("Unknown trace flag: %s\n", s)
@@ -77,7 +86,7 @@ func main() {
 			GlbDebug |= FlagNames[s]
 		}
 	} else {
-		for _, s := range strings.Split(*dbgIDPtr, ",") {
+		for _, s := range splitArg(dbgIDPtr) {
 			flag, ok := FlagNames[s]
 			if !ok {
 				fmt.Printf("Unknown debug flag: %s\n", s)
@@ -108,11 +117,18 @@ func main() {
 	if GlbSystemID, err = clns.ISOEncode(*sysIDPtr); err != nil {
 		panic(err)
 	}
-	if GlbAreaID, err = clns.ISOEncode(*areaIDPtr); err != nil {
-		panic(err)
+	for _, s := range splitArg(areaIDPtr) {
+		a, err := clns.ISOEncode(s)
+		if err != nil {
+			panic(err)
+		}
+		GlbAreaIDs = append(GlbAreaIDs, a)
+		if len(GlbAreaIDs) > clns.MaxArea {
+			panic("More areas than allowed")
+		}
 	}
 	if GlbISType.IsLevelEnabled(1) {
-		fmt.Printf("System ID: %s Area ID: %s\n", GlbSystemID, GlbAreaID)
+		fmt.Printf("System ID: %s Area IDs: %v\n", GlbSystemID, GlbAreaIDs)
 	} else {
 		fmt.Printf("System ID: %s\n", GlbSystemID)
 	}
@@ -139,7 +155,7 @@ func main() {
 
 	// Add interfaces
 	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
-	for _, ifname := range strings.Fields(*iflistPtr) {
+	for _, ifname := range splitArg(iflistPtr) {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		_, err = cdb.NewCircuit(ifname, GlbISType, updb)
 		if err != nil {

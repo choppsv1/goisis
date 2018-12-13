@@ -14,7 +14,7 @@ type TLV interface {
 // ErrNoSpace is returns from TLV adding routines when there is not enough space
 // to continue.
 type ErrNoSpace struct {
-	required, capacity int
+	required, capacity uint
 }
 
 func (e ErrNoSpace) Error() string {
