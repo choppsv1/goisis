@@ -1,6 +1,6 @@
 
 all:
-	go install ./...
+	go install -gcflags=all="-N -l" ./...
 	sudo setcap cap_net_raw=pe ~/go/bin/goisis
 
 .PHONY: docker

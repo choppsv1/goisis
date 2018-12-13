@@ -401,7 +401,10 @@ func NewBufferTrack(size, offset, max uint, closeOpen func(buf, prev Data) uint)
 // allocated and initialized buffer that will not be extended.
 func NewSingleBufferTrack(tlvp Data) *BufferTrack {
 	return &BufferTrack{
-		Buffers: []Buffer{{}},
+		Buffers: []Buffer{{
+			Tlvp: tlvp,
+			Endp: tlvp,
+		}},
 	}
 }
 
