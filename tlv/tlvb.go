@@ -661,7 +661,7 @@ func (bt *BufferTrack) AddIntfAddrs(addrs []net.IPNet) error {
 			return err
 		}
 		for _, addr := range addrs {
-			if err := bt.Add(addr.IP.To4()); err == nil {
+			if err := bt.Add(addr.IP.To4()); err != nil {
 				return err
 			}
 		}
@@ -670,7 +670,7 @@ func (bt *BufferTrack) AddIntfAddrs(addrs []net.IPNet) error {
 			return err
 		}
 		for _, addr := range addrs {
-			if err := bt.Add(addr.IP.To16()); err == nil {
+			if err := bt.Add(addr.IP.To16()); err != nil {
 				return err
 			}
 		}
