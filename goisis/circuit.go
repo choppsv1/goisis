@@ -55,6 +55,7 @@ type Circuit interface {
 	ClosePDU(ether.Frame, []byte) ether.Frame
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	Name() string
+	GetAddrs(v4 bool) []net.IPNet
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
 	RecvHello(pdu *RecvPDU)
@@ -122,10 +123,14 @@ func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*upda
 	return cll, err
 }
 
-func (cdb *CircuitDB) GetIPv4Addrs() []net.IP {
-}
-
-func (cdb *CircuitDB) GetIPv6Addrs() []net.IP {
+func (cdb *CircuitDB) GetAddrs(v4 bool) []net.IPNet {
+	addrs := make([]net.IPNet, 0, len(cdb.circuits))
+	for _, c := range cdb.circuits {
+		for _, addr := range c.GetAddrs(v4) {
+			addrs = append(addrs, addr)
+		}
+	}
+	return addrs
 }
 
 //
@@ -366,6 +371,14 @@ func (c *CircuitLAN) ChgFlag(flag update.SxxFlag, lspid *clns.LSPID, set bool, l
 		set:   set,
 		flag:  flag,
 		lspid: *lspid,
+	}
+}
+
+func (c *CircuitLAN) GetAddrs(v4 bool) []net.IPNet {
+	if v4 {
+		return c.v4addrs
+	} else {
+		return c.v6addrs
 	}
 }
 

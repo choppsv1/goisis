@@ -376,22 +376,22 @@ type BufferTrack struct {
 
 	// Private
 	offset uint
-	init   func(Data, Data) uint
+	finish func(Data, uint) error
 	t      Track
 }
 
 // NewBufferTrack returns a buffer tracker for inserting TLVs. 'size' is the
-// size of the buffers, off is the offset to TLVs space, 'max' is the maximum
-// number of buffers, closeOpen is a function to initialize the header or nil which
-// returns an adjusted TLV space offset. This function then also has a chance to
-// "close" the previous buffer which is also passed in to it.
-func NewBufferTrack(size, offset, max uint, closeOpen func(buf, prev Data) uint) *BufferTrack {
+// size of the buffers, off is the offset to TLVs space in the buffer space, and
+// 'max' is the maximum number of buffers. 'finish' is a function to initialize
+// the header and further process the buffer (likely update the Update Process
+// with new LSP segment data)
+func NewBufferTrack(size, offset, max uint, finish func(Data, uint) error) *BufferTrack {
 	bt := &BufferTrack{
 		Max:     max,
 		Size:    size,
 		Buffers: make([]Buffer, 1, 256),
 		offset:  offset,
-		init:    closeOpen,
+		finish:  finish,
 	}
 	bt.newBuffer()
 	return bt
@@ -414,18 +414,30 @@ func (bt *BufferTrack) newBuffer() error {
 		return fmt.Errorf("Exceeded maximum buffer space")
 	}
 	start := make(Data, 0, bt.Size)
-	pstart := bt.Buffers[count-1].Hdr
 	offset := bt.offset
-	if bt.init != nil {
-		offset = bt.init(start, pstart)
+	if count > 0 {
+		pstart := bt.Buffers[count-1].Hdr
+		if err := bt.finish(pstart, uint(count-1)); err != nil {
+			return err
+		}
 	}
 	bt.Buffers = append(bt.Buffers, Buffer{start, start[offset:], start[offset:]})
 	return nil
 }
 
-// CloseBufferTrack the buffer tracker returning the slice of all allocated buffers.
-func (bt *BufferTrack) Close() []Buffer {
-	return bt.Buffers
+// Close the buffer tracker (will cause final finish to be called if non-empty)
+func (bt *BufferTrack) Close() error {
+	count := len(bt.Buffers)
+	if count == 0 {
+		return nil
+	}
+
+	last := bt.Buffers[count-1]
+	if GetOffset(last.Endp, last.Tlvp) == 0 {
+		return nil
+	}
+
+	return bt.finish(last.Hdr, uint(count-1))
 }
 
 // Check that the given TLV tracker has the required space.
@@ -653,7 +665,7 @@ func (bt *BufferTrack) AddAdjSNPA(addrs []net.HardwareAddr) error {
 
 // AddHostname adds hostname TLV if hostname is not nil.
 func (bt *BufferTrack) AddHostname(hostname string) error {
-	if hostname == nil or len(hostname) == 0 {
+	if len(hostname) == 0 {
 		return nil
 	}
 	err := bt.OpenWithAdd([]byte(hostname), TypeHostname, nil)

@@ -206,8 +206,11 @@ func sendLANHello(link *LinkLAN) error {
 		return err
 	}
 
-	b := bt.Close()[0]
-	endp = b.Endp
+	if err = bt.Close(); err != nil {
+		return err
+	}
+
+	endp = bt.EndSpace()
 
 	// Pad to MTU
 	for cap(endp) > 1 {

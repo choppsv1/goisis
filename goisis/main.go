@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
+	"os"
 	"strings"
 	"time"
 )
@@ -131,9 +132,10 @@ func main() {
 		}
 	}
 
-	if GlbHostname, err := os.Hostname(); err != nil {
+	if h, err := os.Hostname(); err != nil {
 		info("WARNING: Error getting hostname: %s", err)
-		GlbHostname = nil
+	} else {
+		GlbHostname = h
 	}
 
 	if GlbISType.IsLevelEnabled(1) {
