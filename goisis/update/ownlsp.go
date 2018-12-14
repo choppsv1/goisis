@@ -35,6 +35,7 @@ func NewLSP(pnid byte, li clns.LIndex, cdb *CircuitDB, c Circuit) *LSP {
 		cdb:      cdb,
 		c:        c,
 		segments: make(map[uint8][]byte),
+		// genTimer: time.NewTimer(2),
 	}
 
 	// Just use this code when we need nodeid

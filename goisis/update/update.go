@@ -38,6 +38,7 @@ type DB struct {
 	dataC    chan interface{}
 	pduC     chan inputPDU
 	db       map[clns.LSPID]*lspSegment
+	ownlsp   map[uint8]*LSP
 	debug    func(string, ...interface{})
 }
 
@@ -129,6 +130,9 @@ func NewDB(sysid []byte, l clns.Level, debug func(string, ...interface{})) *DB {
 		dataC:    make(chan interface{}),
 		pduC:     make(chan inputPDU),
 	}
+
+	db.ownlsp[0] = NewLSP(0, l.ToIndex(), db, nil)
+
 	copy(db.sysid[:], sysid)
 	go db.Run()
 
