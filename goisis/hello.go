@@ -193,15 +193,12 @@ func sendLANHello(link *LinkLAN) error {
 		return err
 	}
 
-	if len(link.circuit.v4addrs) != 0 {
-		if err = bt.AddIntfAddrs(link.circuit.v4addrs); err != nil {
-			return err
-		}
+	if err = bt.AddIntfAddrs(link.circuit.v4addrs); err != nil {
+		return err
 	}
-	if len(link.circuit.v6addrs) != 0 {
-		if err = bt.AddIntfAddrs(link.circuit.v6addrs); err != nil {
-			return err
-		}
+
+	if err = bt.AddIntfAddrs(link.circuit.v6addrs); err != nil {
+		return err
 	}
 
 	if err = bt.AddAdjSNPA(link.getKnownSNPA()); err != nil {

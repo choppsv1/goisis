@@ -15,21 +15,24 @@ const (
 	DbgFPkt DbgFlags = 1 << iota
 	DbgFAdj
 	DbgFDIS
+	DbgFLSP
 	DbgFUpd
 	DbgFFlags
 )
 
 var FlagNames = map[string]DbgFlags{
-	"packet": DbgFPkt,
 	"adj":    DbgFAdj,
 	"dis":    DbgFDIS,
-	"update": DbgFUpd,
 	"flags":  DbgFFlags,
+	"lsp":    DbgFLSP,
+	"packet": DbgFPkt,
+	"update": DbgFUpd,
 }
 var FlagTags = map[DbgFlags]string{
 	DbgFPkt:   "PACKET: ",
 	DbgFAdj:   "ADJ: ",
 	DbgFDIS:   "DIS: ",
+	DbgFLSP:   "LSPGEN: ",
 	DbgFUpd:   "UPDATE: ",
 	DbgFFlags: "FLAGS: ",
 }

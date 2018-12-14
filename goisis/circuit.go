@@ -94,6 +94,13 @@ func NewCircuitDB() *CircuitDB {
 	return cdb
 }
 
+//
+// CircuitDB is a database of circuits we run on.
+//
+type CircuitDB struct {
+	circuits map[string]Circuit
+}
+
 // NewCircuit creates a circuit enabled for the given levels.
 func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*update.DB) (*CircuitLAN, error) {
 	ifname, err := resolveIfname(ifname)
@@ -115,11 +122,10 @@ func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*upda
 	return cll, err
 }
 
-//
-// CircuitDB is a database of circuits we run on.
-//
-type CircuitDB struct {
-	circuits map[string]Circuit
+func (cdb *CircuitDB) GetIPv4Addrs() []net.IP {
+}
+
+func (cdb *CircuitDB) GetIPv6Addrs() []net.IP {
 }
 
 //
@@ -208,11 +214,19 @@ type CircuitLAN struct {
 }
 
 func (c *CircuitLAN) String() string {
-	return fmt.Sprintf("CircuitLAN(%s)", c.CircuitBase)
+	if c == nil {
+		return "Originating"
+	} else {
+		return fmt.Sprintf("CircuitLAN(%s)", c.CircuitBase)
+	}
 }
 
 func (c *CircuitLAN) Name() string {
-	return c.intf.Name
+	if c == nil {
+		return "Internal"
+	} else {
+		return c.intf.Name
+	}
 }
 
 // getOurSNPA returns the SNPA for this circuit

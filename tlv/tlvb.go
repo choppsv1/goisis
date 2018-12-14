@@ -607,7 +607,7 @@ func (bt *BufferTrack) EndSpace() Data {
 }
 
 // ===============================
-// TLV Conrete Insertion Functions
+// TLV Concrete Insertion Functions
 // ===============================
 
 // AddAreas adds the given areas in a TLV[s]. We expect and required everything
@@ -649,6 +649,18 @@ func (bt *BufferTrack) AddAdjSNPA(addrs []net.HardwareAddr) error {
 	}
 	bt.CloseTLV(true)
 	return nil
+}
+
+// AddHostname adds hostname TLV if hostname is not nil.
+func (bt *BufferTrack) AddHostname(hostname string) error {
+	if hostname == nil or len(hostname) == 0 {
+		return nil
+	}
+	err := bt.OpenWithAdd([]byte(hostname), TypeHostname, nil)
+	if err == nil {
+		bt.CloseTLV(true)
+	}
+	return err
 }
 
 // AddIntfAddr adds all ip addresses as interface addresses

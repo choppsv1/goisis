@@ -64,7 +64,7 @@ func (e ErrLSP) Error() string {
 
 // inputPDU is the PDU input to the udpate process
 type inputPDU struct {
-	c       Circuit
+	c       Circuit // nil is internal originated.
 	payload []byte
 	pdutype clns.PDUType
 	tlvs    map[tlv.Type][]tlv.Data
@@ -253,7 +253,7 @@ func (lsp *lspSegment) String() string {
 		lsp.getCksum())
 }
 
-// SetAllFlag sets flag for LSPID on all circuits but 'not' for updb level.
+// setAllFlag sets flag for LSPID on all circuits but 'not' for updb level.
 func (db *DB) setAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
 	for _, c := range db.circuits {
 		if c != not {
@@ -262,7 +262,7 @@ func (db *DB) setAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
 	}
 }
 
-// ClearAllFlag clears flag for LSPID on all circuits but 'not' for updb level.
+// clearAllFlag clears flag for LSPID on all circuits but 'not' for updb level.
 func (db *DB) clearAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
 	for _, c := range db.circuits {
 		if c != not {
@@ -271,14 +271,20 @@ func (db *DB) clearAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
 	}
 }
 
-// SetFlag sets flag for LSPID on circuit for the updb level.
+// setFlag sets flag for LSPID on circuit for the updb level.
 func (db *DB) setFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
-	c.ChgFlag(flag, lspid, true, db.li)
+	// May be called with nil if the LSP is internal originated
+	if c != nil {
+		c.ChgFlag(flag, lspid, true, db.li)
+	}
 }
 
-// ClearFlag clears flag for LSPID on circuit for the updb level.
+// clearFlag clears flag for LSPID on circuit for the updb level.
 func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
-	c.ChgFlag(flag, lspid, false, db.li)
+	// May be called with nil if the LSP is internal originated
+	if c != nil {
+		c.ChgFlag(flag, lspid, false, db.li)
+	}
 }
 
 // Slicer grabs a slice from a byte slice given a start and length.

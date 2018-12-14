@@ -19,6 +19,9 @@ var GlbISType clns.LevelFlag
 // GlbSystemID is the system ID of this IS-IS instance
 var GlbSystemID []byte
 
+// GlbSystemID is the system ID of this IS-IS instance
+var GlbHostname string
+
 // GlbAreaIDs is the slice of our area IDs
 var GlbAreaIDs [][]byte
 
@@ -127,6 +130,12 @@ func main() {
 			panic("More areas than allowed")
 		}
 	}
+
+	if GlbHostname, err := os.Hostname(); err != nil {
+		info("WARNING: Error getting hostname: %s", err)
+		GlbHostname = nil
+	}
+
 	if GlbISType.IsLevelEnabled(1) {
 		fmt.Printf("System ID: %s Area IDs: %v\n", GlbSystemID, GlbAreaIDs)
 	} else {
