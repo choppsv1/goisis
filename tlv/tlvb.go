@@ -338,14 +338,14 @@ func min(a, b int) int {
 
 // GetOffset returns the length of bytes between cur and the packet start
 // of p.
-func GetOffset(p Data, cur Data) int {
+func GetOffset(start Data, cur Data) int {
 	if cap(cur) == 0 {
 		// This means we filled the buffer perfectly
-		return len(p)
+		return len(start)
 	}
 	cp := uintptr(unsafe.Pointer(&cur[0]))
-	pp := uintptr(unsafe.Pointer(&p[0]))
-	return int(cp - pp)
+	startp := uintptr(unsafe.Pointer(&start[0]))
+	return int(cp - startp)
 }
 
 // Track is used to track an open TLV.
@@ -389,7 +389,7 @@ func NewBufferTrack(size, offset, max uint, finish func(Data, uint) error) *Buff
 	bt := &BufferTrack{
 		Max:     max,
 		Size:    size,
-		Buffers: make([]Buffer, 1, 256),
+		Buffers: make([]Buffer, 0, 256),
 		offset:  offset,
 		finish:  finish,
 	}
@@ -408,16 +408,24 @@ func NewSingleBufferTrack(tlvp Data) *BufferTrack {
 	}
 }
 
+func (bt *BufferTrack) closeBuffer() error {
+	count := len(bt.Buffers)
+	last := bt.Buffers[count-1]
+	pstart := last.Hdr
+	sz := GetOffset(pstart, last.Endp)
+	return bt.finish(pstart[:sz], uint(count-1))
+}
+
 func (bt *BufferTrack) newBuffer() error {
 	count := len(bt.Buffers)
 	if count == int(bt.Max) {
 		return fmt.Errorf("Exceeded maximum buffer space")
 	}
-	start := make(Data, 0, bt.Size)
+	start := make([]byte, bt.Size)
 	offset := bt.offset
 	if count > 0 {
-		pstart := bt.Buffers[count-1].Hdr
-		if err := bt.finish(pstart, uint(count-1)); err != nil {
+		// Assert there's space used here Tlvp, Endp
+		if err := bt.closeBuffer(); err != nil {
 			return err
 		}
 	}
@@ -427,17 +435,22 @@ func (bt *BufferTrack) newBuffer() error {
 
 // Close the buffer tracker (will cause final finish to be called if non-empty)
 func (bt *BufferTrack) Close() error {
+	if bt.finish == nil {
+		return nil
+	}
+
 	count := len(bt.Buffers)
 	if count == 0 {
 		return nil
 	}
 
 	last := bt.Buffers[count-1]
-	if GetOffset(last.Endp, last.Tlvp) == 0 {
+	if GetOffset(last.Tlvp, last.Endp) == 0 {
 		return nil
 	}
 
-	return bt.finish(last.Hdr, uint(count-1))
+	return bt.closeBuffer()
+
 }
 
 // Check that the given TLV tracker has the required space.
@@ -602,7 +615,7 @@ func (bt *BufferTrack) OpenWithAdd(b []byte, typ Type, addheader func(Type, Data
 //   1) dumpEmpty is false; or
 //   2) there non-header data present
 func (bt *BufferTrack) CloseTLV(dumpEmpty bool) {
-	if dumpEmpty && GetOffset(bt.t.end, bt.t.hdrend) == 0 {
+	if dumpEmpty && GetOffset(bt.t.hdrend, bt.t.end) == 0 {
 		// Here we are closing a TLV that we wanted to add some entry
 		// data to. dumpEmpty means the semantics are that data is
 		// expected, and if there's none in the existing Open TLV we

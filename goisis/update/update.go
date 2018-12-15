@@ -14,8 +14,9 @@ import (
 	"time"
 )
 
-// or should we just wait until DIS timer first fires?
-const NonPNodeCreateTimeout = 10
+// Delays for own LSP gen..
+const LSPCreateGenDelay = 10 * time.Second
+const LSPGenDelay = 100 * time.Millisecond
 
 // ==========
 // Interfaces
@@ -25,7 +26,8 @@ const NonPNodeCreateTimeout = 10
 type Circuit interface {
 	IsP2P() bool
 	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
-	GetAddrs(v4 bool) []net.IPNet
+	Addrs(v4 bool) []net.IPNet
+	CID(clns.LIndex) uint8
 	Name() string
 }
 
@@ -38,13 +40,14 @@ type DB struct {
 	sysid    clns.SystemID // change to public as immutable
 	areas    [][]byte
 	nlpid    []byte
-	li       clns.LIndex // change to public as immutable
+	istype   clns.LevelFlag // change to public as immutable
+	li       clns.LIndex    // change to public as immutable
 	hostname string
 	circuits map[string]Circuit
 	dis      map[uint8]Circuit
 	chgCC    chan chgCircuit
 	chgDISC  chan chgDIS
-	regenC   chan uint8
+	chgLSPC  chan chgLSP
 	expireC  chan clns.LSPID
 	dataC    chan interface{}
 	pduC     chan inputPDU
@@ -65,6 +68,11 @@ type chgCircuit struct {
 type chgDIS struct {
 	c   Circuit // nil for resign.
 	cid uint8   // circuit ID
+}
+
+type chgLSP struct {
+	pnid  uint8
+	timer bool
 }
 
 // ErrIIH is a general error in IIH packet processing
@@ -128,19 +136,21 @@ func (result lspCompareResult) String() string {
 }
 
 // NewDB returns a new Update Process LSP database
-func NewDB(sysid []byte, l clns.Level, areas [][]byte, nlpid []byte, debug func(string, ...interface{})) *DB {
+func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nlpid []byte, debug func(string, ...interface{})) *DB {
 	db := &DB{
+		istype:   istype,
 		li:       l.ToIndex(),
 		areas:    areas,
 		nlpid:    nlpid,
 		hostname: "",
 		circuits: make(map[string]Circuit),
-		regenC:   make(chan uint8),
+		chgLSPC:  make(chan chgLSP),
 		chgCC:    make(chan chgCircuit),
 		chgDISC:  make(chan chgDIS),
 		debug:    debug,
 		dis:      make(map[uint8]Circuit),
 		db:       make(map[clns.LSPID]*lspSegment),
+		ownlsp:   make(map[uint8]*LSP),
 		expireC:  make(chan clns.LSPID),
 		dataC:    make(chan interface{}),
 		pduC:     make(chan inputPDU),
@@ -152,8 +162,8 @@ func NewDB(sysid []byte, l clns.Level, areas [][]byte, nlpid []byte, debug func(
 		db.hostname = h
 	}
 
-	// Cause refresh (creation) of non-pnode LSP.
-	time.AfterFunc(NonPNodeCreateTimeout, func() { db.regenC <- uint8(0) })
+	// Create our own LSP
+	db.ownlsp[0] = NewLSP(0, db, nil)
 
 	copy(db.sysid[:], sysid)
 	go db.Run()
@@ -165,7 +175,7 @@ func NewDB(sysid []byte, l clns.Level, areas [][]byte, nlpid []byte, debug func(
 // External API
 // ============
 
-// InputPDU creates or updates an LSP in the update DB after validity checks.
+// InputLSP creates or updates an LSP in the update DB after validity checks.
 func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) error {
 
 	// ------------------------------------------------------------
@@ -178,8 +188,9 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 
 	// Check the length
 	if len(payload) > clns.LSPOrigBufSize {
-		return ErrLSP(fmt.Sprintf("TRAP: corruptedLSPReceived: %s len %d",
-			c, len(payload)))
+		s := fmt.Sprintf("TRAP: corruptedLSPReceived: %s len %d", c, len(payload))
+		db.debug(s)
+		return ErrLSP(s)
 	}
 
 	// Check the checksum
@@ -188,7 +199,9 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 		cksum := clns.Cksum(lspbuf[4:], 0)
 		if cksum != 0 {
 			fcksum := pkt.GetUInt16(lspbuf[clns.HdrLSPCksum:])
-			return ErrLSP(fmt.Sprintf("TRAP corruptedLSPReceived: %s got 0x%04x expect 0x%04x dropping", c, cksum, fcksum))
+			s := fmt.Sprintf("TRAP corruptedLSPReceived: %s got 0x%04x expect 0x%04x dropping", c, cksum, fcksum)
+			db.debug(s)
+			return ErrLSP(s)
 		}
 	}
 
@@ -196,14 +209,18 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 	btlv := tlvs[tlv.TypeLspBufSize]
 	if btlv != nil {
 		if len(btlv) != 1 {
-			return ErrLSP(fmt.Sprintf("INFO: Incorrect LSPBufSize TLV count: %d", len(btlv)))
+			s := fmt.Sprintf("INFO: Incorrect LSPBufSize TLV count: %d", len(btlv))
+			db.debug(s)
+			return ErrLSP(s)
 		}
 		val, err := btlv[0].LSPBufSizeValue()
 		if err != nil {
 			return err
 		}
 		if val != clns.LSPOrigBufSize {
-			return ErrLSP(fmt.Sprintf("TRAP: originatingLSPBufferSizeMismatch: %d", val))
+			s := fmt.Sprintf("TRAP: originatingLSPBufferSizeMismatch: %d", val)
+			db.debug(s)
+			return ErrLSP(s)
 		}
 	}
 
@@ -214,7 +231,7 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 	return nil
 }
 
-// InputPDU creates or updates an LSP in the update DB after validity checks.
+// InputSNP creates or updates an LSP in the update DB after validity checks.
 func (db *DB) InputSNP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map[tlv.Type][]tlv.Data) error {
 
 	// -------------------------------------------------------------
@@ -244,6 +261,17 @@ func (db *DB) ElectDIS(c Circuit, cid uint8) {
 // ResignDIS inform UP that we have resigned DIS for the circuit ID.
 func (db *DB) ResignDIS(cid uint8) {
 	db.chgDISC <- chgDIS{nil, cid}
+}
+
+// SomethingChanged indicate to the update process that something changed, if
+// 'c' is non-nil then it relates to the circuit otherwise the router.
+func (db *DB) SomethingChanged(c Circuit) {
+	if c == nil {
+		db.chgLSPC <- chgLSP{}
+	} else {
+		cid := c.CID(db.li)
+		db.chgLSPC <- chgLSP{pnid: cid}
+	}
 }
 
 // CopyLSPPayload copies the LSP payload buffer for sending if found and returns
@@ -313,10 +341,10 @@ func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
 	}
 }
 
-func (db *DB) GetAddrs(v4 bool) []net.IPNet {
+func (db *DB) Addrs(v4 bool) []net.IPNet {
 	addrs := make([]net.IPNet, 0, len(db.circuits))
 	for _, c := range db.circuits {
-		for _, addr := range c.GetAddrs(v4) {
+		for _, addr := range c.Addrs(v4) {
 			addrs = append(addrs, addr)
 		}
 	}
@@ -572,7 +600,8 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 	//    normal handling except that we do not add a missing LSP segment,
 	//    instead we acknowledge receipt only.
 
-	if isOurs {
+	// We input or own LSP here with nil circuit to differentiate.
+	if isOurs && c != nil {
 		// XXX check all this.
 		pnid := lsp.lspid[7]
 		var unsupported bool
@@ -637,10 +666,18 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 
 	if result == NEWER {
 		if lsp != nil {
-			db.debug("%s: Updating LSP from %s", db, c)
+			if c != nil {
+				db.debug("%s: Updating LSP from %s", db, c)
+			} else {
+				db.debug("%s: Updating Own LSP", db)
+			}
 			db.updateLSPSegment(lsp, payload, tlvs)
 		} else {
-			db.debug("%s: Added LSP from %s", db, c)
+			if c != nil {
+				db.debug("%s: Added LSP from %s", db, c)
+			} else {
+				db.debug("%s: Added Own LSP", db)
+			}
 			if nlifetime == 0 {
 				// 17.3.16.4: a
 				// XXX send ack on circuit do not retain
@@ -651,7 +688,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 
 		db.setAllFlag(SRM, &lsp.lspid, c)
 		db.clearFlag(SRM, &lsp.lspid, c)
-		if c.IsP2P() {
+		if c != nil && c.IsP2P() {
 			db.setFlag(SSN, &lsp.lspid, c)
 		}
 		db.clearAllFlag(SSN, &lsp.lspid, c)
@@ -659,7 +696,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 		// e2) Same - Stop sending and Acknowledge
 		//     [ also: ISO 10589 17.3.16.4: b.2 ]
 		db.clearAllFlag(SRM, &lsp.lspid, nil)
-		if c.IsP2P() {
+		if c != nil && c.IsP2P() {
 			db.setFlag(SSN, &lsp.lspid, c)
 		}
 	} else {
@@ -823,23 +860,32 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 	db.debug("8) <-expireC %s", lspid)
 }
 
-// handleRegenC handles regeneration of lsp given by 'in' value.
-func (db *DB) handleRegenC(lspnum uint8) {
-	lsp := db.ownlsp[lspnum]
+// handleChgLSPC handles changes to our Own LSPs
+func (db *DB) handleChgLSPC(in chgLSP) {
+	lsp := db.ownlsp[in.pnid]
 	if lsp == nil {
-		if lspnum != 0 {
-			return
-		}
-
-		// Create our non-pnode LSP.
-		lsp = NewLSP(0, db.li, db, nil)
-		db.ownlsp[0] = lsp
+		return
 	}
-	lsp.regenLSP()
+
+	// This is our regen wait timer, regen now.
+	if in.timer {
+		lsp.regenWait = nil
+		lsp.regenLSP()
+		return
+	}
+
+	// If we are already waiting we are done.
+	if lsp.regenWait != nil {
+		return
+	}
+
+	delay := time.Millisecond * 100
+	lsp.regenWait = time.AfterFunc(delay,
+		func() { db.chgLSPC <- chgLSP{timer: true, pnid: in.pnid} })
 }
 
 // inputPDU handles one PDU from our pdu channel
-func (db *DB) handlePDUC(in *inputPDU) {
+func (db *DB) handlePduC(in *inputPDU) {
 	switch in.pdutype {
 	case clns.PDUTypeLSPL1, clns.PDUTypeLSPL2:
 		db.receiveLSP(in.c, in.payload, in.tlvs)
@@ -895,14 +941,15 @@ func (db *DB) handleChgDISC(in chgDIS) {
 
 // Run runs the update process
 func (db *DB) Run() {
+
 	for {
 		select {
 		case in := <-db.chgDISC:
 			db.handleChgDISC(in)
-		case in := <-db.regenC:
-			db.handleRegenC(in)
+		case in := <-db.chgLSPC:
+			db.handleChgLSPC(in)
 		case in := <-db.pduC:
-			db.handlePDUC(&in)
+			db.handlePduC(&in)
 		case in := <-db.expireC:
 			db.handleExpireC(in)
 		case in := <-db.dataC:

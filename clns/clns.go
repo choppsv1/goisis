@@ -95,6 +95,11 @@ const (
 	LSPFPbit
 )
 
+// MakeLSPFlags returns a byte for header insertion.
+func MakeLSPFlags(flags LSPFlags, istype LevelFlag) uint8 {
+	return uint8(flags) | uint8(istype)
+}
+
 // -------------------------
 // CSNP header offset values
 // -------------------------
@@ -151,6 +156,18 @@ const (
 	NLPIDIPv4 = 0xcc
 	NLPIDIPv6 = 0x8e
 )
+
+// HeaderTemplate are the static values we use in the CLNS header.
+var HeaderTemplate = []uint8{
+	IDRPISIS,
+	0, // Header Length
+	Version,
+	SysIDLen,
+	0, // PDU Type
+	Version2,
+	0,       // Reserved
+	MaxArea, // Max Area
+}
 
 // ====================================
 // Protocol Types and Support Functions
@@ -247,6 +264,11 @@ var PDUTypeDesc = map[PDUType]string{
 	PDUTypePSNPL1:   "PDUTypePSNPL1",
 	PDUTypePSNPL2:   "PDUTypePSNPL2",
 }
+
+var IIHTypeMap = [2]PDUType{PDUTypeIIHLANL1, PDUTypeIIHLANL2}
+var LSPTypeMap = [2]PDUType{PDUTypeLSPL1, PDUTypeLSPL2}
+var CSNPTypeMap = [2]PDUType{PDUTypeCSNPL1, PDUTypeCSNPL2}
+var PSNPTypeMap = [2]PDUType{PDUTypePSNPL1, PDUTypePSNPL2}
 
 func (typ PDUType) String() string {
 	// XXX add nice map with strings
@@ -397,6 +419,15 @@ func (n NodeID) String() string {
 // comprised of a NodeID and a final segment octet to allow for multiple
 // segments to describe an full LSP.
 type LSPID [LSPIDLen]byte
+
+// NewLSPID constructs an LSPID from it's constituents.
+func MakeLSPID(sysid SystemID, pnid, segid uint8) LSPID {
+	var lspid LSPID
+	copy(lspid[:], sysid[:])
+	lspid[SysIDLen] = pnid
+	lspid[NodeIDLen] = segid
+	return lspid
+}
 
 func (l LSPID) String() string {
 	return ISOString(l[:LSPIDLen], true)
@@ -572,15 +603,21 @@ func ValidatePDU(llc, payload []byte, istype, ctype LevelFlag) ([]byte, PDUType,
 	return payload, pdutype, nil
 }
 
+func InitHeader(b []byte, pdutype PDUType) {
+	copy(b, HeaderTemplate)
+	b[HdrCLNSPDUType] = uint8(pdutype)
+	b[HdrCLNSLen] = HdrLenMap[pdutype]
+}
+
 //
 // From RFC 1008: 7.2.1
 //
-var MODX = uint16(4102)
+const MODX = 4102
 
 // Cksum returns the ISO cksum of the message treating k and k-1 bytes as zero
 // if k > 0.
-func Cksum(msg []byte, k uint16) uint16 {
-	p3 := uint16(len(msg))
+func Cksum(msg []byte, k int) uint16 {
+	p3 := len(msg)
 
 	// We can't modify the data so we look for it later while iterating
 	// if k > 0 {
@@ -588,9 +625,9 @@ func Cksum(msg []byte, k uint16) uint16 {
 	// 	msg[k] = 0
 	// }
 
-	c0 := uint16(0)
-	c1 := uint16(0)
-	p1 := uint16(0)
+	c0 := 0
+	c1 := 0
+	p1 := 0
 
 	// Outer sum accumulation loop
 	for p1 < p3 {
@@ -602,7 +639,7 @@ func Cksum(msg []byte, k uint16) uint16 {
 		for p := p1; p < p2; p++ {
 			// if these are the bytes of an embedded cksum
 			if k == 0 || (p != k-1 && p != k) {
-				c0 = c0 + uint16(msg[p])
+				c0 = c0 + int(msg[p])
 			}
 			c1 = c1 + c0
 		}
@@ -615,22 +652,26 @@ func Cksum(msg []byte, k uint16) uint16 {
 	// concat c1 and c0
 	ip := ((c1 & 0xff) << 8) + (c0 & 0xFF)
 	if k == 0 {
-		return ip
+		fmt.Printf("0x%x\n", ip)
+		return uint16(ip)
 	}
 
 	// iq = ((mlen - k) * c0 - c1) % 255
-	iq := ((p3-(k))*c0 - c1) % 255
+	iq := ((p3-k)*c0 - c1) % 255
 	if iq <= 0 {
-		iq = iq + 255
+		iq += 255
 	}
 	// mess[k-1] = iq     // Can't modify data
 
 	ir := (510 - c0 - iq)
 	if ir > 255 {
-		ir = ir - 255
+		ir -= 255
 	}
+
 	// mess[k] = ir // Can't modify data
 
 	// Return in host order
-	return ((iq & 0xFF) << 8) | (ir & 0xFF)
+	ip = ((iq & 0xFF) << 8) | (ir & 0xFF)
+
+	return uint16(ip)
 }

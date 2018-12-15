@@ -30,18 +30,6 @@ var llcTemplate = []uint8{
 	clns.LLCControl,
 }
 
-// clnsTemplate are the static values we use in the CLNS header.
-var clnsTemplate = []uint8{
-	clns.IDRPISIS,
-	0, // Header Length
-	clns.Version,
-	clns.SysIDLen,
-	0, // PDU Type
-	clns.Version2,
-	0,            // Reserved
-	clns.MaxArea, // Max Area
-}
-
 // ----------
 // Interfaces
 // ----------
@@ -55,7 +43,8 @@ type Circuit interface {
 	ClosePDU(ether.Frame, []byte) ether.Frame
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	Name() string
-	GetAddrs(v4 bool) []net.IPNet
+	Addrs(v4 bool) []net.IPNet
+	CID(clns.LIndex) uint8
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
 	RecvHello(pdu *RecvPDU)
@@ -314,11 +303,9 @@ func CloseFrame(etherp ether.Frame, len int) ether.Frame {
 //
 func (c *CircuitLAN) OpenPDU(pdutype clns.PDUType, dst net.HardwareAddr) (ether.Frame, []byte, []byte, []byte) {
 	etherp, clnsp := c.OpenFrame(dst)
-	copy(clnsp, clnsTemplate)
 
-	clnsp[clns.HdrCLNSPDUType] = uint8(pdutype)
-	hdrlen := clns.HdrLenMap[pdutype]
-	clnsp[clns.HdrCLNSLen] = hdrlen
+	clns.InitHeader(clnsp, pdutype)
+	hdrlen := clnsp[clns.HdrCLNSLen]
 
 	return etherp, clnsp, clnsp[clns.HdrCLNSSize:], clnsp[hdrlen:]
 }
@@ -364,12 +351,16 @@ func (c *CircuitLAN) ChgFlag(flag update.SxxFlag, lspid *clns.LSPID, set bool, l
 	}
 }
 
-func (c *CircuitLAN) GetAddrs(v4 bool) []net.IPNet {
+func (c *CircuitLAN) Addrs(v4 bool) []net.IPNet {
 	if v4 {
 		return c.v4addrs
 	} else {
 		return c.v6addrs
 	}
+}
+
+func (c *CircuitLAN) CID(li clns.LIndex) uint8 {
+	return c.levlink[li].lclCircID
 }
 
 func (c *CircuitLAN) IsP2P() bool {

@@ -8,27 +8,31 @@ package update
 
 import (
 	"github.com/choppsv1/goisis/clns"
-	"time"
-	// "github.com/choppsv1/goisis/pkt"
-	// xtime "github.com/choppsv1/goisis/time"
+	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/tlv"
+	"time"
 )
 
+type Segment struct {
+	payload  []byte
+	refreshT time.Timer
+}
+
 type LSP struct {
-	Pnid     uint // redundant this is the last byte of Nodeid
-	li       clns.LIndex
-	l        clns.Level
-	db       *DB
-	c        Circuit
-	segments map[uint8][]byte
-	genTimer time.Timer
+	Pnid      uint8
+	li        clns.LIndex
+	l         clns.Level
+	db        *DB
+	c         Circuit
+	segments  map[uint8][]byte
+	regenWait *time.Timer
 }
 
 // NewLSP creates a new LSP for the router.
-func NewLSP(pnid byte, li clns.LIndex, db *DB, c Circuit) *LSP {
+func NewLSP(pnid byte, db *DB, c Circuit) *LSP {
 	lsp := &LSP{
-		Pnid:     uint(pnid),
-		li:       li,
+		Pnid:     pnid,
+		li:       db.li,
 		db:       db,
 		c:        c,
 		segments: make(map[uint8][]byte),
@@ -38,12 +42,57 @@ func NewLSP(pnid byte, li clns.LIndex, db *DB, c Circuit) *LSP {
 	// copy(lsp.Nodeid[:], GlbSystemID[:])
 	// nodeid[clns.SysIDLen] = pnid
 
+	// We delay generating non-pnode a short time to gather startup changes.
+	delay := LSPGenDelay
+	if pnid == 0 {
+		// We only long delay for our own (non-pnode) LSP.
+		delay = LSPCreateGenDelay
+	}
+	lsp.regenWait = time.AfterFunc(delay,
+		func() { db.chgLSPC <- chgLSP{timer: true, pnid: pnid} })
+
+	lsp.db.debug("%s: LSP pnid %d generation scheduled %s", lsp.li, pnid, delay)
+
 	return lsp
 }
 
-// newSegBuffer to obtain a new segment buffer, with an initialized header, and
+// finishSegment update the LSP segment header prior to pushing out.
 // send previous buffer to the update process.
-func (lsp *LSP) finishSegment(buf tlv.Data, i uint) error {
+func (lsp *LSP) finishSegment(payload []byte, i uint) error {
+	clns.InitHeader(payload, clns.LSPTypeMap[lsp.db.li])
+	hdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
+
+	// Increment seqno
+	seqno := uint32(0)
+	lspid := clns.MakeLSPID(lsp.db.sysid, lsp.Pnid, uint8(i))
+	dblsp := lsp.db.db[lspid]
+	if dblsp != nil {
+		seqno = dblsp.getSeqNo()
+	}
+	// XXX check for rollover.
+	seqno += 1
+
+	pkt.PutUInt16(hdr[clns.HdrLSPPDULen:], uint16(len(payload)))
+	pkt.PutUInt16(hdr[clns.HdrLSPLifetime:], clns.MaxAge)
+
+	copy(hdr[clns.HdrLSPLSPID:], lspid[:])
+	pkt.PutUInt32(hdr[clns.HdrLSPSeqNo:], seqno)
+	pkt.PutUInt16(hdr[clns.HdrLSPCksum:], 0)
+	hdr[clns.HdrLSPFlags] = clns.MakeLSPFlags(0, lsp.db.istype)
+
+	lspbuf := payload[clns.HdrCLNSSize:]
+	cksum := clns.Cksum(lspbuf[clns.HdrLSPLSPID:], 13)
+
+	pkt.PutUInt16(hdr[clns.HdrLSPCksum:], cksum)
+
+	// Input into our DB.
+	tlvs, err := tlv.Data(hdr[clns.HdrLSPSize:]).ParseTLV()
+	if err != nil {
+		panic("Invalid TLV from ourselves")
+	}
+
+	lsp.db.receiveLSP(nil, payload, tlvs)
+
 	return nil
 }
 
@@ -73,11 +122,11 @@ func (lsp *LSP) regenNonPNodeLSP() error {
 		lsp.db.debug("Error adding Hostname TLV: %s", err)
 	}
 
-	if err := bt.AddIntfAddrs(lsp.db.GetAddrs(true)); err != nil {
+	if err := bt.AddIntfAddrs(lsp.db.Addrs(true)); err != nil {
 		return err
 	}
 
-	if err := bt.AddIntfAddrs(lsp.db.GetAddrs(true)); err != nil {
+	if err := bt.AddIntfAddrs(lsp.db.Addrs(false)); err != nil {
 		return err
 	}
 
@@ -88,22 +137,25 @@ func (lsp *LSP) regenNonPNodeLSP() error {
 	// Prefixes
 
 	// External Gen App
-	return nil
+
+	return bt.Close()
 
 }
 
 // regenerate pnode LSP
-func (lsp *LSP) regenPNodeLSP() {
+func (lsp *LSP) regenPNodeLSP() error {
 	lsp.db.debug("%s: PN LSP Generation starts", lsp.li)
 
 	// Ext Reach
+	return nil
+	// return bt.Close()
 }
 
 // regenLSP regenerates the LSP.
-func (lsp *LSP) regenLSP() {
+func (lsp *LSP) regenLSP() error {
 	if lsp.Pnid > 0 {
-		lsp.regenPNodeLSP()
+		return lsp.regenPNodeLSP()
 	} else {
-		lsp.regenNonPNodeLSP()
+		return lsp.regenNonPNodeLSP()
 	}
 }
