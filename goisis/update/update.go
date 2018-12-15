@@ -26,7 +26,7 @@ const LSPGenDelay = 100 * time.Millisecond
 type Circuit interface {
 	IsP2P() bool
 	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
-	Addrs(v4 bool) []net.IPNet
+	Addrs(v4, linklocal bool) []net.IPNet
 	CID(clns.LIndex) uint8
 	Name() string
 }
@@ -300,10 +300,11 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 // String returns a string identifying the LSP DB lock must be held
 func (lsp *lspSegment) String() string {
 	s := clns.ISOString(lsp.getLSPID(), false)
-	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v cksum:%#04x)",
+	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v:%v cksum:%#04x)",
 		s,
 		lsp.getSeqNo(),
 		lsp.checkLifetime(),
+		pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:]),
 		lsp.getCksum())
 }
 
@@ -344,7 +345,7 @@ func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
 func (db *DB) Addrs(v4 bool) []net.IPNet {
 	addrs := make([]net.IPNet, 0, len(db.circuits))
 	for _, c := range db.circuits {
-		for _, addr := range c.Addrs(v4) {
+		for _, addr := range c.Addrs(v4, false) {
 			addrs = append(addrs, addr)
 		}
 	}

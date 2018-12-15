@@ -197,7 +197,7 @@ func sendLANHello(link *LinkLAN) error {
 		return err
 	}
 
-	if err = bt.AddIntfAddrs(link.circuit.v6addrs); err != nil {
+	if err = bt.AddIntfAddrs(link.circuit.v6lladdrs); err != nil {
 		return err
 	}
 

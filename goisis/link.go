@@ -231,7 +231,7 @@ func (link *LinkLAN) sendAnLSP() {
 		link.changeFlag(SRM, false, &lspid)
 		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.li])
 		if l := link.updb.CopyLSPPayload(&lspid, payload); l != 0 {
-			debug(DbgFFlags, "%s SENDING LSP %s", link, lspid)
+			debug(DbgFFlags, "%s SENDING LSP %s len %d", link, lspid, l)
 			link.circuit.outpkt <- CloseFrame(etherp, l)
 			break
 		}

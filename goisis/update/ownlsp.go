@@ -61,6 +61,7 @@ func NewLSP(pnid byte, db *DB, c Circuit) *LSP {
 func (lsp *LSP) finishSegment(payload []byte, i uint) error {
 	clns.InitHeader(payload, clns.LSPTypeMap[lsp.db.li])
 	hdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
+	lspbuf := payload[clns.HdrCLNSSize:]
 
 	// Increment seqno
 	seqno := uint32(0)
@@ -69,20 +70,16 @@ func (lsp *LSP) finishSegment(payload []byte, i uint) error {
 	if dblsp != nil {
 		seqno = dblsp.getSeqNo()
 	}
-	// XXX check for rollover.
-	seqno += 1
+	seqno += 1 // XXX check for rollover.
 
+	// Fill in LSP header
 	pkt.PutUInt16(hdr[clns.HdrLSPPDULen:], uint16(len(payload)))
 	pkt.PutUInt16(hdr[clns.HdrLSPLifetime:], clns.MaxAge)
-
 	copy(hdr[clns.HdrLSPLSPID:], lspid[:])
 	pkt.PutUInt32(hdr[clns.HdrLSPSeqNo:], seqno)
 	pkt.PutUInt16(hdr[clns.HdrLSPCksum:], 0)
 	hdr[clns.HdrLSPFlags] = clns.MakeLSPFlags(0, lsp.db.istype)
-
-	lspbuf := payload[clns.HdrCLNSSize:]
 	cksum := clns.Cksum(lspbuf[clns.HdrLSPLSPID:], 13)
-
 	pkt.PutUInt16(hdr[clns.HdrLSPCksum:], cksum)
 
 	// Input into our DB.
@@ -90,7 +87,6 @@ func (lsp *LSP) finishSegment(payload []byte, i uint) error {
 	if err != nil {
 		panic("Invalid TLV from ourselves")
 	}
-
 	lsp.db.receiveLSP(nil, payload, tlvs)
 
 	return nil

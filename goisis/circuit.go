@@ -43,7 +43,7 @@ type Circuit interface {
 	ClosePDU(ether.Frame, []byte) ether.Frame
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	Name() string
-	Addrs(v4 bool) []net.IPNet
+	Addrs(v4, linklocal bool) []net.IPNet
 	CID(clns.LIndex) uint8
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
@@ -116,15 +116,16 @@ func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*upda
 // CircuitBase collects common functionality from all types of circuits
 //
 type CircuitBase struct {
-	intf    *net.Interface
-	sock    raw.IntfSocket
-	lf      clns.LevelFlag
-	cdb     *CircuitDB
-	updb    [2]*update.DB
-	v4addrs []net.IPNet
-	v6addrs []net.IPNet
-	outpkt  chan []byte
-	quit    <-chan bool
+	intf      *net.Interface
+	sock      raw.IntfSocket
+	lf        clns.LevelFlag
+	cdb       *CircuitDB
+	updb      [2]*update.DB
+	v4addrs   []net.IPNet
+	v6addrs   []net.IPNet
+	v6lladdrs []net.IPNet
+	outpkt    chan []byte
+	quit      <-chan bool
 }
 
 func (cb *CircuitBase) String() string {
@@ -163,7 +164,11 @@ func NewCircuitBase(ifname string, lf clns.LevelFlag, cdb *CircuitDB, updb [2]*u
 			ipnet.IP = ipv4
 			cb.v4addrs = append(cb.v4addrs, *ipnet)
 		} else {
-			cb.v6addrs = append(cb.v6addrs, *ipnet)
+			if ipnet.IP.IsLinkLocalUnicast() {
+				cb.v6lladdrs = append(cb.v6lladdrs, *ipnet)
+			} else {
+				cb.v6addrs = append(cb.v6addrs, *ipnet)
+			}
 		}
 	}
 
@@ -351,9 +356,11 @@ func (c *CircuitLAN) ChgFlag(flag update.SxxFlag, lspid *clns.LSPID, set bool, l
 	}
 }
 
-func (c *CircuitLAN) Addrs(v4 bool) []net.IPNet {
+func (c *CircuitLAN) Addrs(v4, linklocal bool) []net.IPNet {
 	if v4 {
 		return c.v4addrs
+	} else if linklocal {
+		return c.v6lladdrs
 	} else {
 		return c.v6addrs
 	}

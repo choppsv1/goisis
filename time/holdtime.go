@@ -28,10 +28,17 @@ func (t *HoldTimer) Stop() bool {
 // Reset resets the timer if possible, if it has already fired then false is
 // returned.
 func (t *HoldTimer) Reset(holdtime uint16) bool {
-	if !t.t.Stop() {
-		// The timer has fire the function has is is being called.
-		return false
-	}
+
+	// XXX It's very important that Stop either be called prior or we know
+	// its expired before resetting here. Just calling t.t.Stop() here will
+	// return false if it doesn't stop the timer (i.e., if it expired or we
+	// already stopped it. Since we almost always want to Stop externally
+	// (or we know it expired) just require this always.
+	// if !t.t.Stop() {
+	//      // The timer has fire the function has is is being called.
+	//      return false
+	// }
+
 	ns := time.Second * time.Duration(holdtime)
 	t.end = time.Now().Add(ns)
 	t.t.Reset(ns)
