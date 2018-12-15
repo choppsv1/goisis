@@ -123,16 +123,6 @@ func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*upda
 	return cll, err
 }
 
-func (cdb *CircuitDB) GetAddrs(v4 bool) []net.IPNet {
-	addrs := make([]net.IPNet, 0, len(cdb.circuits))
-	for _, c := range cdb.circuits {
-		for _, addr := range c.GetAddrs(v4) {
-			addrs = append(addrs, addr)
-		}
-	}
-	return addrs
-}
-
 //
 // CircuitBase collects common functionality from all types of circuits
 //

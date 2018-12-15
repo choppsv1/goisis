@@ -156,7 +156,7 @@ func main() {
 	for l := clns.Level(1); l <= 2; l++ {
 		if GlbISType.IsLevelEnabled(l) {
 			li := l.ToIndex()
-			updb[li] = update.NewDB(GlbSystemID[:], l, dbdebug)
+			updb[li] = update.NewDB(GlbSystemID[:], l, GlbAreaIDs, GlbNLPID, dbdebug)
 		}
 	}
 

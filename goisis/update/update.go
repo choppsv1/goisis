@@ -8,8 +8,14 @@ import (
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
+	"net"
+	"os"
 	"sort"
+	"time"
 )
+
+// or should we just wait until DIS timer first fires?
+const NonPNodeCreateTimeout = 10
 
 // ==========
 // Interfaces
@@ -19,6 +25,7 @@ import (
 type Circuit interface {
 	IsP2P() bool
 	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
+	GetAddrs(v4 bool) []net.IPNet
 	Name() string
 }
 
@@ -29,11 +36,15 @@ type Circuit interface {
 // DB holds all LSP for a given level.
 type DB struct {
 	sysid    clns.SystemID // change to public as immutable
-	li       clns.LIndex   // change to public as immutable
+	areas    [][]byte
+	nlpid    []byte
+	li       clns.LIndex // change to public as immutable
+	hostname string
 	circuits map[string]Circuit
 	dis      map[uint8]Circuit
 	chgCC    chan chgCircuit
 	chgDISC  chan chgDIS
+	regenC   chan uint8
 	expireC  chan clns.LSPID
 	dataC    chan interface{}
 	pduC     chan inputPDU
@@ -117,10 +128,14 @@ func (result lspCompareResult) String() string {
 }
 
 // NewDB returns a new Update Process LSP database
-func NewDB(sysid []byte, l clns.Level, debug func(string, ...interface{})) *DB {
+func NewDB(sysid []byte, l clns.Level, areas [][]byte, nlpid []byte, debug func(string, ...interface{})) *DB {
 	db := &DB{
 		li:       l.ToIndex(),
+		areas:    areas,
+		nlpid:    nlpid,
+		hostname: "",
 		circuits: make(map[string]Circuit),
+		regenC:   make(chan uint8),
 		chgCC:    make(chan chgCircuit),
 		chgDISC:  make(chan chgDIS),
 		debug:    debug,
@@ -131,7 +146,14 @@ func NewDB(sysid []byte, l clns.Level, debug func(string, ...interface{})) *DB {
 		pduC:     make(chan inputPDU),
 	}
 
-	db.ownlsp[0] = NewLSP(0, l.ToIndex(), db, nil)
+	if h, err := os.Hostname(); err != nil {
+		db.debug("WARNING: Error getting hostname: %s", err)
+	} else {
+		db.hostname = h
+	}
+
+	// Cause refresh (creation) of non-pnode LSP.
+	time.AfterFunc(NonPNodeCreateTimeout, func() { db.regenC <- uint8(0) })
 
 	copy(db.sysid[:], sysid)
 	go db.Run()
@@ -289,6 +311,16 @@ func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
 	if c != nil {
 		c.ChgFlag(flag, lspid, false, db.li)
 	}
+}
+
+func (db *DB) GetAddrs(v4 bool) []net.IPNet {
+	addrs := make([]net.IPNet, 0, len(db.circuits))
+	for _, c := range db.circuits {
+		for _, addr := range c.GetAddrs(v4) {
+			addrs = append(addrs, addr)
+		}
+	}
+	return addrs
 }
 
 // Slicer grabs a slice from a byte slice given a start and length.
@@ -791,6 +823,21 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 	db.debug("8) <-expireC %s", lspid)
 }
 
+// handleRegenC handles regeneration of lsp given by 'in' value.
+func (db *DB) handleRegenC(lspnum uint8) {
+	lsp := db.ownlsp[lspnum]
+	if lsp == nil {
+		if lspnum != 0 {
+			return
+		}
+
+		// Create our non-pnode LSP.
+		lsp = NewLSP(0, db.li, db, nil)
+		db.ownlsp[0] = lsp
+	}
+	lsp.regenLSP()
+}
+
 // inputPDU handles one PDU from our pdu channel
 func (db *DB) handlePDUC(in *inputPDU) {
 	switch in.pdutype {
@@ -852,6 +899,8 @@ func (db *DB) Run() {
 		select {
 		case in := <-db.chgDISC:
 			db.handleChgDISC(in)
+		case in := <-db.regenC:
+			db.handleRegenC(in)
 		case in := <-db.pduC:
 			db.handlePDUC(&in)
 		case in := <-db.expireC:
