@@ -384,11 +384,11 @@ func (lsp *lspSegment) getUpdLifetime(shave bool) uint16 {
 	}
 	lifetime := lsp.life.Until()
 	// This is to test flooding
-	if shave {
-		if lifetime > 15 {
-			lifetime -= 15
-		}
-	}
+	// if shave {
+	// 	if lifetime > 15 {
+	// 		lifetime -= 15
+	// 	}
+	// }
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], lifetime)
 	return lifetime
 }
@@ -449,8 +449,8 @@ func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSe
 	copy(lsp.lspid[:], hdr[clns.HdrLSPLSPID:])
 
 	lifetime := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
-	// XXX testing
-	lifetime = 30
+	// // XXX testing
+	// lifetime = 30
 	lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
 	lsp.isOurs = bytes.Equal(lsp.lspid[:clns.SysIDLen], db.sysid[:])
 	// // We aren't locked but this isn't in the DB yet.
