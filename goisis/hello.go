@@ -79,17 +79,17 @@ func (a *Adj) String() string {
 
 // StartHelloProcess starts a go routine to send and receive hellos, manage
 // adjacencies and elect DIS on LANs
-func StartHelloProcess(link *LinkLAN, interval uint, quit <-chan bool) {
-	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, interval)
-	ival := time.Second * time.Duration(interval)
-	ticker := time.NewTicker(ival) // XXX replace with jittered timer.
+func StartHelloProcess(link *LinkLAN, quit <-chan bool) {
+	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, link.helloInt)
+	ival := time.Second * time.Duration(link.helloInt)
+	link.ticker = time.NewTicker(ival) // XXX replace with jittered timer.
 
-	go helloProcess(ticker.C, link, quit)
+	go helloProcess(link, quit)
 }
 
 // sendLANHellos is a go routine that sends hellos based using a ticker
 // It also processes DIS update events.
-func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
+func helloProcess(link *LinkLAN, quit <-chan bool) {
 	disWaiting := true
 	wasWaiting := true
 
@@ -120,7 +120,7 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 			debug(DbgFDIS, "INFO: DIS timer fires %s", link)
 			disWaiting = false
 			rundis = true
-		case <-tickC:
+		case <-link.ticker.C:
 			debug(DbgFPkt, "%s: IIH Tick Start", link)
 			sendLANHello(link)
 			debug(DbgFPkt, "%s: IIH Tick Done", link)
@@ -449,7 +449,10 @@ func (link *LinkLAN) disSelfElect() {
 	}
 
 	link.disElected = true
-	// XXX Start the CNSP timer.
+
+	ival := time.Second * time.Duration(link.helloInt) / 3
+	link.ticker.Stop()
+	link.ticker = time.NewTicker(ival) // XXX replace with jittered timer.
 }
 
 func (link *LinkLAN) disSelfResign() {
@@ -460,7 +463,10 @@ func (link *LinkLAN) disSelfResign() {
 	}
 
 	link.disElected = false
-	// XXX Stop CNSP timer.
+
+	ival := time.Second * time.Duration(link.helloInt)
+	link.ticker.Stop()
+	link.ticker = time.NewTicker(ival) // XXX replace with jittered timer.
 }
 
 func (link *LinkLAN) disElect(firstRun bool) {

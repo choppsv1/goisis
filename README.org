@@ -26,11 +26,10 @@ point-to-point Circuit there will be only a single Link.
 
 ** TODO Missing Items
 *** Hello Process
-    - Implement P2P interfaces
+- Speed up timers when DIS.
+- Implement P2P interfaces
 *** Update Process
-    - Own LSP.
+- CSNP when DIS
+- Own LSP Reachability
 *** Decision Process
-    - Implement
-*** Bugs:
-- Zero Age LSPs are not updated.
-
+- Implement

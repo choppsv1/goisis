@@ -68,6 +68,7 @@ type LinkLAN struct {
 	ourlanID  clns.NodeID
 
 	// Hello Process
+	ticker     *time.Ticker
 	expireC    chan clns.SystemID
 	iihpkt     chan *RecvPDU
 	disTimer   *time.Timer
@@ -122,7 +123,7 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 	link.disTimer = time.NewTimer(dur)
 
 	// Start Sending Hellos
-	StartHelloProcess(link, link.helloInt, quit)
+	StartHelloProcess(link, quit)
 
 	go link.processFlags()
 

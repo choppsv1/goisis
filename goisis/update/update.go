@@ -37,24 +37,25 @@ type Circuit interface {
 
 // DB holds all LSP for a given level.
 type DB struct {
-	sysid    clns.SystemID // change to public as immutable
-	areas    [][]byte
-	nlpid    []byte
-	istype   clns.LevelFlag // change to public as immutable
-	li       clns.LIndex    // change to public as immutable
-	hostname string
-	circuits map[string]Circuit
-	dis      map[uint8]Circuit
-	chgCC    chan chgCircuit
-	chgDISC  chan chgDIS
-	chgLSPC  chan chgLSP
-	expireC  chan clns.LSPID
-	refreshC chan clns.LSPID
-	dataC    chan interface{}
-	pduC     chan inputPDU
-	db       map[clns.LSPID]*lspSegment
-	ownlsp   map[uint8]*OwnLSP
-	debug    func(string, ...interface{})
+	sysid     clns.SystemID // change to public as immutable
+	areas     [][]byte
+	nlpid     []byte
+	istype    clns.LevelFlag // change to public as immutable
+	li        clns.LIndex    // change to public as immutable
+	hostname  string
+	circuits  map[string]Circuit
+	dis       map[uint8]disInfo
+	chgCC     chan chgCircuit
+	chgDISC   chan chgDIS
+	chgLSPC   chan chgLSP
+	csnpTickC chan uint8
+	expireC   chan clns.LSPID
+	refreshC  chan clns.LSPID
+	dataC     chan interface{}
+	pduC      chan inputPDU
+	db        map[clns.LSPID]*lspSegment
+	ownlsp    map[uint8]*OwnLSP
+	debug     func(string, ...interface{})
 }
 
 func (db *DB) String() string {
@@ -137,26 +138,34 @@ func (result lspCompareResult) String() string {
 	}
 }
 
+// disInfo is used to track state for DIS (CSNP)
+type disInfo struct {
+	c       Circuit
+	startID clns.LSPID
+	timer   *time.Timer
+}
+
 // NewDB returns a new Update Process LSP database
 func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nlpid []byte, debug func(string, ...interface{})) *DB {
 	db := &DB{
-		istype:   istype,
-		li:       l.ToIndex(),
-		areas:    areas,
-		nlpid:    nlpid,
-		hostname: "",
-		circuits: make(map[string]Circuit),
-		chgLSPC:  make(chan chgLSP, 10),
-		chgCC:    make(chan chgCircuit, 10),
-		chgDISC:  make(chan chgDIS, 10),
-		debug:    debug,
-		dis:      make(map[uint8]Circuit),
-		db:       make(map[clns.LSPID]*lspSegment),
-		ownlsp:   make(map[uint8]*OwnLSP),
-		expireC:  make(chan clns.LSPID, 10),
-		refreshC: make(chan clns.LSPID, 10),
-		dataC:    make(chan interface{}, 10),
-		pduC:     make(chan inputPDU, 10),
+		istype:    istype,
+		li:        l.ToIndex(),
+		areas:     areas,
+		nlpid:     nlpid,
+		hostname:  "",
+		circuits:  make(map[string]Circuit),
+		chgLSPC:   make(chan chgLSP, 10),
+		chgCC:     make(chan chgCircuit, 10),
+		chgDISC:   make(chan chgDIS, 10),
+		debug:     debug,
+		dis:       make(map[uint8]disInfo),
+		db:        make(map[clns.LSPID]*lspSegment),
+		ownlsp:    make(map[uint8]*OwnLSP),
+		expireC:   make(chan clns.LSPID, 10),
+		refreshC:  make(chan clns.LSPID, 10),
+		csnpTickC: make(chan uint8, 10),
+		dataC:     make(chan interface{}, 10),
+		pduC:      make(chan inputPDU, 10),
 	}
 
 	if h, err := os.Hostname(); err != nil {
@@ -664,13 +673,14 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 		if pnid == 0 {
 			unsupported = false // always support non-pnode LSP
 		} else {
-			c, set := db.dis[pnid]
-			unsupported = lsp == nil || c == nil
+			di, set := db.dis[pnid]
 			if !set {
 				// We haven't run dis election yet, hold off
 				// on purging until we have.
 				return
 			}
+			c := di.c
+			unsupported = lsp == nil || c == nil
 		}
 
 		// c) Ours, but we don't support, and not expired, perform
@@ -1054,47 +1064,61 @@ func (db *DB) handleDataC(req interface{}) {
 func (db *DB) handleChgDISC(in chgDIS) {
 	db.debug("%s: handle DIS change in: %v", db, in)
 
-	c, wasSet := db.dis[in.cid]
-
-	db.debug("%s: handleChgDIS 1", db)
-
-	db.dis[in.cid] = in.c
-
-	db.debug("%s: handleChgDIS 2", db)
-
-	if wasSet && c == in.c {
-		db.debug("%s: No DIS change c: %v in: %v", db, c, in)
+	di, wasSet := db.dis[in.cid]
+	if wasSet && di.c == in.c {
+		db.debug("%s: No DIS change c: %v in: %v", db, di.c, in)
 		return
 	}
-
-	db.debug("%s: handleChgDIS 3", db)
 
 	// Update our non-pnode LSP
 	db.SomethingChanged(nil)
 
-	db.debug("%s: handleChgDIS 4", db)
-
 	elected := in.c != nil
-
-	db.debug("%s: handleChgDIS 5", db)
-
 	if !wasSet && !elected {
-		db.debug("%s: No DIS set and we aren't elected on %s", db, c)
+		// Indicate elected but not us.
+		db.dis[in.cid] = disInfo{}
+		db.debug("%s: No DIS set and we aren't elected on CID %d", db, in.cid)
 		return
 	}
-
-	db.debug("%s: handleChgDIS 6", db)
-
 	if elected {
 		c := in.c
 		db.debug("%s: Elected DIS on %s", db, c.Name())
+
+		// Start sending CSNP
+		// XXX csnp interval hardcoded here.
+		db.dis[in.cid] = disInfo{
+			c: in.c,
+			timer: time.AfterFunc(time.Second*10, func() {
+				db.csnpTickC <- in.cid
+			}),
+		}
+
 		db.ownlsp[in.cid] = NewOwnLSP(in.cid, db, c)
 	} else {
+		// Stop the CSNP timer.
+		if di.timer != nil {
+			di.timer.Stop()
+		}
+		c := di.c
+
+		db.dis[in.cid] = disInfo{}
+
 		db.debug("%s: Resigned DIS on %s", db, c.Name())
 		lsp := db.ownlsp[in.cid]
 		db.ownlsp[in.cid] = nil
 		lsp.purge()
+
+		// Stop sending CSNP
 	}
+}
+
+// Send a CSNP packet on the circuit.
+func (db *DB) handleCsnpTickC(in uint8) {
+	di, ok := db.dis[in]
+	if !ok || di.c == nil {
+		return
+	}
+	// XXX fill a CSNP PDU here.
 }
 
 // Run runs the update process
@@ -1106,6 +1130,8 @@ func (db *DB) run() {
 			db.handleChgDISC(in)
 		case in := <-db.chgLSPC:
 			db.handleChgLSPC(in)
+		case in := <-db.csnpTickC:
+			db.handleCsnpTickC(in)
 		case in := <-db.pduC:
 			db.handlePduC(&in)
 		case in := <-db.expireC:
