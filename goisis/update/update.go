@@ -53,7 +53,7 @@ type DB struct {
 	dataC    chan interface{}
 	pduC     chan inputPDU
 	db       map[clns.LSPID]*lspSegment
-	ownlsp   map[uint8]*LSP
+	ownlsp   map[uint8]*OwnLSP
 	debug    func(string, ...interface{})
 }
 
@@ -146,17 +146,17 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 		nlpid:    nlpid,
 		hostname: "",
 		circuits: make(map[string]Circuit),
-		chgLSPC:  make(chan chgLSP),
-		chgCC:    make(chan chgCircuit),
-		chgDISC:  make(chan chgDIS),
+		chgLSPC:  make(chan chgLSP, 10),
+		chgCC:    make(chan chgCircuit, 10),
+		chgDISC:  make(chan chgDIS, 10),
 		debug:    debug,
 		dis:      make(map[uint8]Circuit),
 		db:       make(map[clns.LSPID]*lspSegment),
-		ownlsp:   make(map[uint8]*LSP),
-		expireC:  make(chan clns.LSPID),
-		refreshC: make(chan clns.LSPID),
-		dataC:    make(chan interface{}),
-		pduC:     make(chan inputPDU),
+		ownlsp:   make(map[uint8]*OwnLSP),
+		expireC:  make(chan clns.LSPID, 10),
+		refreshC: make(chan clns.LSPID, 10),
+		dataC:    make(chan interface{}, 10),
+		pduC:     make(chan inputPDU, 10),
 	}
 
 	if h, err := os.Hostname(); err != nil {
@@ -166,10 +166,10 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 	}
 
 	// Create our own LSP
-	db.ownlsp[0] = NewLSP(0, db, nil)
+	db.ownlsp[0] = NewOwnLSP(0, db, nil)
 
 	copy(db.sysid[:], sysid)
-	go db.Run()
+	go db.run()
 
 	return db
 }
@@ -306,13 +306,12 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 
 // String returns a string identifying the LSP DB lock must be held
 func (lsp *lspSegment) String() string {
-	s := clns.ISOString(lsp.getLSPID(), false)
-	return fmt.Sprintf("LSP(id:%s seqno:%#08x lifetime:%v:%v cksum:%#04x)",
-		s,
-		lsp.getSeqNo(),
+	return fmt.Sprintf("LSP(id:%s seqno:%#08x holdtimer:%v lifetime:%v cksum:%#04x)",
+		clns.ISOString(lsp.lspid[:], false),
+		lsp.seqNo(),
 		lsp.checkLifetime(),
 		pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:]),
-		lsp.getCksum())
+		lsp.cksum())
 }
 
 // setAllFlag sets flag for LSPID on all circuits but 'not' for updb level.
@@ -349,7 +348,7 @@ func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
 	}
 }
 
-func (db *DB) Addrs(v4 bool) []net.IPNet {
+func (db *DB) addrs(v4 bool) []net.IPNet {
 	addrs := make([]net.IPNet, 0, len(db.circuits))
 	for _, c := range db.circuits {
 		for _, addr := range c.Addrs(v4, false) {
@@ -364,7 +363,7 @@ func Slicer(b []byte, start int, length int) []byte {
 	return b[start : start+length]
 }
 
-func (lsp *lspSegment) getSeqNo() uint32 {
+func (lsp *lspSegment) seqNo() uint32 {
 	return pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:])
 }
 
@@ -397,46 +396,13 @@ func (lsp *lspSegment) setLifetime(sec uint16) {
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], sec)
 }
 
-func (lsp *lspSegment) getCksum() uint16 {
+func (lsp *lspSegment) cksum() uint16 {
 	return pkt.GetUInt16(lsp.hdr[clns.HdrLSPCksum:])
 }
 
 // func (lsp *lspSegment) getFlags() clns.LSPFlags {
 // 	return clns.LSPFlags(lsp.hdr[clns.HdrLSPFlags])
 // }
-
-func (lsp *lspSegment) getLSPID() []byte {
-	return lsp.hdr[clns.HdrLSPLSPID : clns.HdrLSPLSPID+clns.LSPIDLen]
-}
-
-// compareLSP we compare against either the LSP header + 2 or an SNPEntry.
-func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
-	if lsp == nil {
-		return NEWER
-	}
-
-	// Do a quick check to see if this is the same memory.
-	if tlv.GetOffset(lsp.payload[clns.HdrCLNSSize+clns.HdrLSPLifetime:], e) == 0 {
-		return SAME
-	}
-
-	nseqno := pkt.GetUInt32(e[tlv.SNPEntSeqNo:])
-	oseqno := lsp.getSeqNo()
-	if nseqno > oseqno {
-		return NEWER
-	} else if nseqno < oseqno {
-		return OLDER
-	}
-
-	nlifetime := pkt.GetUInt16(e[tlv.SNPEntLifetime:])
-	olifetime := lsp.getUpdLifetime(false)
-	if nlifetime == 0 && olifetime != 0 {
-		return NEWER
-	} else if olifetime == 0 && nlifetime != 0 {
-		return OLDER
-	}
-	return SAME
-}
 
 // newLSPSegment creates a new lspSegment struct
 func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSegment {
@@ -482,7 +448,7 @@ func (db *DB) newZeroLSPSegment(lifetime uint16, lspid *clns.LSPID, cksum uint16
 	return lsp
 }
 
-// updateLSP updates an lspSegment with a newer version received on a link.
+// updateLSPSegment updates an lspSegment with a newer version received on a link.
 func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
 	if db.debug != nil {
 		db.debug("%s: Updating %s", db, lsp)
@@ -605,6 +571,60 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	db.debug("Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
+}
+
+// Increment the sequence number for one of our own LSP segments, fixup the
+// header and inject into DB.
+func (db *DB) incSeqNo(payload []byte, seqno uint32) {
+	db.debug("%s Incrementing Own Seq No 0x%x", db, seqno)
+
+	lspbuf := payload[clns.HdrCLNSSize:]
+
+	seqno += 1 // XXX deal with rollover.
+
+	lifetime := uint16(clns.MaxAge)
+	pkt.PutUInt16(lspbuf[clns.HdrLSPLifetime:], lifetime)
+	pkt.PutUInt32(lspbuf[clns.HdrLSPSeqNo:], seqno)
+	pkt.PutUInt16(lspbuf[clns.HdrLSPCksum:], 0)
+	cksum := clns.Cksum(lspbuf[clns.HdrLSPLSPID:], 13)
+	pkt.PutUInt16(lspbuf[clns.HdrLSPCksum:], cksum)
+
+	tlvs, err := tlv.Data(lspbuf[clns.HdrLSPSize:]).ParseTLV()
+	if err != nil {
+		db.debug("%s Invalid TLV from ourselves", db)
+		panic("Invalid TLV from ourselves")
+	}
+
+	db.receiveLSP(nil, payload, tlvs)
+}
+
+// compareLSP we compare against either the LSP header + 2 or an SNPEntry.
+func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
+	if lsp == nil {
+		return NEWER
+	}
+
+	// Do a quick check to see if this is the same memory.
+	if tlv.GetOffset(lsp.payload[clns.HdrCLNSSize+clns.HdrLSPLifetime:], e) == 0 {
+		return SAME
+	}
+
+	nseqno := pkt.GetUInt32(e[tlv.SNPEntSeqNo:])
+	oseqno := lsp.seqNo()
+	if nseqno > oseqno {
+		return NEWER
+	} else if nseqno < oseqno {
+		return OLDER
+	}
+
+	nlifetime := pkt.GetUInt16(e[tlv.SNPEntLifetime:])
+	olifetime := lsp.getUpdLifetime(false)
+	if nlifetime == 0 && olifetime != 0 {
+		return NEWER
+	} else if olifetime == 0 && nlifetime != 0 {
+		return OLDER
+	}
+	return SAME
 }
 
 // receiveLSP receives an LSP from flooding
@@ -868,7 +888,7 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 			lsp := db.db[lspid]
 
 			db.debug("%s: CSNP: Missing %s", db, lsp)
-			if lsp.getSeqNo() == 0 {
+			if lsp.seqNo() == 0 {
 				db.debug("%s: CSNP: Skipping zero seqno: LSPID: %s", db, lspid)
 				continue
 			}
@@ -880,31 +900,6 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 		}
 	}
 
-}
-
-// Increment the sequence number for one of our own LSP segments, fixup the
-// header and inject into DB.
-func (db *DB) incSeqNo(payload []byte, seqno uint32) {
-	db.debug("%s Incrementing Own Seq No 0x%x", db, seqno)
-
-	lspbuf := payload[clns.HdrCLNSSize:]
-
-	seqno += 1 // XXX deal with rollover.
-
-	lifetime := uint16(clns.MaxAge)
-	pkt.PutUInt16(lspbuf[clns.HdrLSPLifetime:], lifetime)
-	pkt.PutUInt32(lspbuf[clns.HdrLSPSeqNo:], seqno)
-	pkt.PutUInt16(lspbuf[clns.HdrLSPCksum:], 0)
-	cksum := clns.Cksum(lspbuf[clns.HdrLSPLSPID:], 13)
-	pkt.PutUInt16(lspbuf[clns.HdrLSPCksum:], cksum)
-
-	tlvs, err := tlv.Data(lspbuf[clns.HdrLSPSize:]).ParseTLV()
-	if err != nil {
-		db.debug("%s Invalid TLV from ourselves", db)
-		panic("Invalid TLV from ourselves")
-	}
-
-	db.receiveLSP(nil, payload, tlvs)
 }
 
 func (db *DB) isOwnSupported(lspid clns.LSPID) bool {
@@ -938,7 +933,7 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 			lsp.refresh = nil
 		}
 		db.debug("<-expireC: %s Expired without refresh increment", lsp)
-		db.incSeqNo(lsp.payload, lsp.getSeqNo())
+		db.incSeqNo(lsp.payload, lsp.seqNo())
 		return
 	}
 
@@ -990,7 +985,7 @@ func (db *DB) handleRefreshC(in clns.LSPID) {
 		// initiate a purge.
 		return
 	}
-	db.incSeqNo(dblsp.payload, dblsp.getSeqNo())
+	db.incSeqNo(dblsp.payload, dblsp.seqNo())
 }
 
 // handleChgLSPC handles changes to our Own LSPs
@@ -1057,23 +1052,53 @@ func (db *DB) handleDataC(req interface{}) {
 }
 
 func (db *DB) handleChgDISC(in chgDIS) {
-	c := db.dis[in.cid]
+	db.debug("%s: handle DIS change in: %v", db, in)
+
+	c, wasSet := db.dis[in.cid]
+
+	db.debug("%s: handleChgDIS 1", db)
+
 	db.dis[in.cid] = in.c
-	if c == in.c {
+
+	db.debug("%s: handleChgDIS 2", db)
+
+	if wasSet && c == in.c {
+		db.debug("%s: No DIS change c: %v in: %v", db, c, in)
 		return
 	}
+
+	db.debug("%s: handleChgDIS 3", db)
+
+	// Update our non-pnode LSP
+	db.SomethingChanged(nil)
+
+	db.debug("%s: handleChgDIS 4", db)
+
 	elected := in.c != nil
+
+	db.debug("%s: handleChgDIS 5", db)
+
+	if !wasSet && !elected {
+		db.debug("%s: No DIS set and we aren't elected on %s", db, c)
+		return
+	}
+
+	db.debug("%s: handleChgDIS 6", db)
+
 	if elected {
 		c := in.c
 		db.debug("%s: Elected DIS on %s", db, c.Name())
+		db.ownlsp[in.cid] = NewOwnLSP(in.cid, db, c)
 	} else {
 		db.debug("%s: Resigned DIS on %s", db, c.Name())
+		lsp := db.ownlsp[in.cid]
+		db.ownlsp[in.cid] = nil
+		lsp.purge()
 	}
-	// XXX Originate or Purge PNode.
 }
 
 // Run runs the update process
-func (db *DB) Run() {
+func (db *DB) run() {
 
 	for {
 		select {

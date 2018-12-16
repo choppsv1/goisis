@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-type LSP struct {
+type OwnLSP struct {
 	Pnid      uint8
 	li        clns.LIndex
 	l         clns.Level
@@ -23,9 +23,9 @@ type LSP struct {
 	regenWait *time.Timer
 }
 
-// NewLSP creates a new LSP for the router.
-func NewLSP(pnid byte, db *DB, c Circuit) *LSP {
-	lsp := &LSP{
+// NewOwnLSP creates a new OwnLSP for the router.
+func NewOwnLSP(pnid byte, db *DB, c Circuit) *OwnLSP {
+	lsp := &OwnLSP{
 		Pnid:     pnid,
 		li:       db.li,
 		db:       db,
@@ -40,20 +40,20 @@ func NewLSP(pnid byte, db *DB, c Circuit) *LSP {
 	// We delay generating non-pnode a short time to gather startup changes.
 	delay := LSPGenDelay
 	if pnid == 0 {
-		// We only long delay for our own (non-pnode) LSP.
+		// We only long delay for our own (non-pnode) OwnLSP.
 		delay = LSPCreateGenDelay
 	}
 	lsp.regenWait = time.AfterFunc(delay,
 		func() { db.chgLSPC <- chgLSP{timer: true, pnid: pnid} })
 
-	lsp.db.debug("%s: LSP pnid %d generation scheduled %s", lsp.li, pnid, delay)
+	lsp.db.debug("%s: OwnLSP pnid %d generation scheduled %s", lsp.li, pnid, delay)
 
 	return lsp
 }
 
 // finishSegment update the LSP segment header prior to pushing out.
 // send previous buffer to the update process.
-func (lsp *LSP) finishSegment(payload []byte, i uint8) error {
+func (lsp *OwnLSP) finishSegment(payload []byte, i uint8) error {
 	lsp.segments[i] = payload
 
 	clns.InitHeader(payload, clns.LSPTypeMap[lsp.db.li])
@@ -64,7 +64,7 @@ func (lsp *LSP) finishSegment(payload []byte, i uint8) error {
 
 	seqno := uint32(0)
 	if dblsp != nil {
-		seqno = dblsp.getSeqNo()
+		seqno = dblsp.seqNo()
 	}
 
 	// Fill in LSP header
@@ -89,9 +89,9 @@ func (db *DB) purgeOwn(pnid, segid uint8) {
 	db.initiatePurgeLSP(lsp, false)
 }
 
-// regenerate non-pnode LSP
-func (lsp *LSP) regenNonPNodeLSP() error {
-	lsp.db.debug("%s: Non-PN LSP Generation starts", lsp.li)
+// regenerate non-pnode OwnLSP
+func (lsp *OwnLSP) regenNonPNodeLSP() error {
+	lsp.db.debug("%s: Non-PN OwnLSP Generation starts", lsp.li)
 
 	oldseg := lsp.segments
 	lsp.segments = make(map[uint8][]byte)
@@ -118,11 +118,11 @@ func (lsp *LSP) regenNonPNodeLSP() error {
 		lsp.db.debug("Error adding Hostname TLV: %s", err)
 	}
 
-	if err := bt.AddIntfAddrs(lsp.db.Addrs(true)); err != nil {
+	if err := bt.AddIntfAddrs(lsp.db.addrs(true)); err != nil {
 		return err
 	}
 
-	if err := bt.AddIntfAddrs(lsp.db.Addrs(false)); err != nil {
+	if err := bt.AddIntfAddrs(lsp.db.addrs(false)); err != nil {
 		return err
 	}
 
@@ -149,9 +149,16 @@ func (lsp *LSP) regenNonPNodeLSP() error {
 	return nil
 }
 
-// regenerate pnode LSP
-func (lsp *LSP) regenPNodeLSP() error {
-	lsp.db.debug("%s: PN LSP Generation starts", lsp.li)
+// purge the LSP we no longer support.
+func (lsp *OwnLSP) purge() {
+	for segid, _ := range lsp.segments {
+		lsp.db.purgeOwn(lsp.Pnid, segid)
+	}
+}
+
+// regenerate pnode OwnLSP
+func (lsp *OwnLSP) regenPNodeLSP() error {
+	lsp.db.debug("%s: PN OwnLSP Generation starts", lsp.li)
 
 	// Ext Reach
 
@@ -170,8 +177,8 @@ func (lsp *LSP) regenPNodeLSP() error {
 	// }
 }
 
-// regenLSP regenerates the LSP.
-func (lsp *LSP) regenLSP() error {
+// regenLSP regenerates the OwnLSP.
+func (lsp *OwnLSP) regenLSP() error {
 	if lsp.Pnid > 0 {
 		return lsp.regenPNodeLSP()
 	} else {

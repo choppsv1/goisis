@@ -94,7 +94,7 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 		l:        li.ToLevel(),
 		li:       li,
 		updb:     updb,
-		priority: 0, // clns.DefHelloPri,
+		priority: 67, // clns.DefHelloPri,
 		helloInt: clns.DefHelloInt,
 		holdMult: clns.DefHelloMult,
 		expireC:  make(chan clns.SystemID, 10),
@@ -106,9 +106,13 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 	}
 	lanLinkCircuitIDs[li]++
 	link.lclCircID = lanLinkCircuitIDs[li]
+
 	copy(link.ourlanID[:], GlbSystemID)
 	link.ourlanID[clns.SysIDLen] = link.lclCircID
-	copy(link.lanID[:], link.ourlanID[:])
+
+	if link.priority != 0 {
+		copy(link.lanID[:], link.ourlanID[:])
+	}
 
 	// Record our SNPA in the map of our SNPA
 	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true

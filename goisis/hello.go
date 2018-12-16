@@ -91,11 +91,13 @@ func StartHelloProcess(link *LinkLAN, interval uint, quit <-chan bool) {
 // It also processes DIS update events.
 func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 	disWaiting := true
+	wasWaiting := true
 
 	sendLANHello(link)
 
 	debug(DbgFPkt, "Sent initial IIH on %s entering hello loop", link)
 	for {
+
 		var rundis bool
 		select {
 		case <-quit:
@@ -129,7 +131,8 @@ func helloProcess(tickC <-chan time.Time, link *LinkLAN, quit <-chan bool) {
 				debug(DbgFDIS, "INFO: Suppress DIS elect on %s", link)
 			} else {
 				debug(DbgFDIS, "INFO: DIS info changed on %s", link)
-				link.disElect()
+				link.disElect(wasWaiting)
+				wasWaiting = false
 			}
 		}
 	}
@@ -444,8 +447,8 @@ func (link *LinkLAN) disSelfElect() {
 	if link.disElected {
 		return
 	}
-	link.disElected = true
 
+	link.disElected = true
 	// XXX Start the CNSP timer.
 }
 
@@ -455,16 +458,19 @@ func (link *LinkLAN) disSelfResign() {
 	if !link.disElected {
 		return
 	}
-	link.disElected = false
 
+	link.disElected = false
 	// XXX Stop CNSP timer.
 }
 
-func (link *LinkLAN) disElect() {
-	debug(DbgFDIS, "Running DIS election on %s", link)
+func (link *LinkLAN) disElect(firstRun bool) {
+	debug(DbgFDIS, "Running DIS election on %s first time %v", link, firstRun)
 
 	var newLANID clns.NodeID
-	oldLANID := link.lanID
+	var oldLANID clns.NodeID
+	if !firstRun {
+		oldLANID = link.lanID
+	}
 
 	electUs, electOther := link.disFindBest()
 	if electUs {
@@ -473,6 +479,8 @@ func (link *LinkLAN) disElect() {
 	} else if electOther != nil {
 		debug(DbgFDIS, "%s electOther %s", link, electOther)
 		newLANID = electOther.lanID
+	} else {
+		debug(DbgFDIS, "%s elect None!", link)
 	}
 
 	if oldLANID == newLANID {
@@ -482,14 +490,11 @@ func (link *LinkLAN) disElect() {
 
 	debug(DbgFDIS, "DIS change: old %s new %s", oldLANID, newLANID)
 
+	// newLANID may be 0s if no-one elected.
+	link.lanID = newLANID
+
 	if !electUs {
 		link.disSelfResign()
-		if electOther == nil {
-			// XXX No DIS -- maybe put a zero here?
-			link.lanID = link.ourlanID
-		} else {
-			link.lanID = newLANID
-		}
 	} else {
 		link.disSelfElect()
 	}
