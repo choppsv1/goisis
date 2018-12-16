@@ -96,9 +96,11 @@ func (p Frame) ValidateLLCFrame(ourSNPA map[MAC]bool) ([]byte, []byte, error) {
 	payload := p[HdrEthSize:]
 
 	etype := p.GetTypeLen()
-	if len(payload) < 46 {
-		return nil, nil, ErrInvalidFrame("payload < 46")
-	}
+
+	// This is causing failures b/c of lack of padding the ethernet frame to 46.
+	// if len(payload) < 46 {
+	//       return nil, nil, ErrInvalidFrame("payload < 46")
+	// }
 
 	if ours := ourSNPA[MACKey(p.GetSrc())]; ours {
 		return nil, nil, ErrOurFrame(true)

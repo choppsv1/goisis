@@ -218,6 +218,7 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 		}
 		val, err := btlv[0].LSPBufSizeValue()
 		if err != nil {
+			db.debug("XXX: LSPBufSizeValue error: %s", err)
 			return err
 		}
 		if val != clns.LSPOrigBufSize {
@@ -229,7 +230,10 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 
 	// Finish the rest in our update process go routine (avoid locking)
 
-	db.debug("%s: Channeling LSP from %s to Update Process", db, c)
+	var lspid clns.LSPID
+	copy(lspid[:], payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
+	db.debug("%s: Channeling LSP %s from %s to Update Process", db, lspid, c)
+
 	db.pduC <- inputPDU{c, payload, pdutype, tlvs}
 	return nil
 }
@@ -371,7 +375,7 @@ func (lsp *lspSegment) checkLifetime() uint16 {
 	return lsp.life.Until()
 }
 
-func (lsp *lspSegment) getUpdLifetime() uint16 {
+func (lsp *lspSegment) getUpdLifetime(shave bool) uint16 {
 	if lsp.life == nil {
 		if pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:]) != 0 {
 			panic("Invalid non-zero life with no holdtimer")
@@ -379,6 +383,12 @@ func (lsp *lspSegment) getUpdLifetime() uint16 {
 		return 0
 	}
 	lifetime := lsp.life.Until()
+	// This is to test flooding
+	if shave {
+		if lifetime > 15 {
+			lifetime -= 15
+		}
+	}
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], lifetime)
 	return lifetime
 }
@@ -419,7 +429,7 @@ func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
 	}
 
 	nlifetime := pkt.GetUInt16(e[tlv.SNPEntLifetime:])
-	olifetime := lsp.getUpdLifetime()
+	olifetime := lsp.getUpdLifetime(false)
 	if nlifetime == 0 && olifetime != 0 {
 		return NEWER
 	} else if olifetime == 0 && nlifetime != 0 {
@@ -609,6 +619,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 
 	newhdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	nlifetime := pkt.GetUInt16(newhdr[clns.HdrLSPLifetime:])
+	nseqno := pkt.GetUInt32(newhdr[clns.HdrLSPSeqNo:])
 
 	result := compareLSP(lsp, newhdr[clns.HdrLSPLifetime:])
 	isOurs := bytes.Equal(lspid[:clns.SysIDLen], db.sysid[:])
@@ -619,7 +630,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 		result = NEWER
 	}
 
-	db.debug("%s: receiveLSP %s 0x%x dblsp %s compare %v isOurs %v fromUs %v", db, lspid, pkt.GetUInt32(newhdr[clns.HdrLSPSeqNo:]), lsp, result, isOurs, fromUs)
+	db.debug("%s: receiveLSP %s 0x%x dblsp %s compare %v isOurs %v fromUs %v", db, lspid, nseqno, lsp, result, isOurs, fromUs)
 
 	// b) If the LSP has zero Remaining Lifetime, perform the actions
 	//    described in 7.3.16.4. -- for LSPs not ours this is the same as
@@ -681,7 +692,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 		// d) Ours, supported and wire is newer, need to increment our
 		// copy per 7.3.16.1
 		if !unsupported && result == NEWER {
-			db.incSeqNo(lsp.payload, lsp.getSeqNo())
+			db.incSeqNo(lsp.payload, nseqno)
 			return
 		}
 
@@ -808,6 +819,7 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 			if lsp != nil {
 				db.debug("%s: SNP Entry [life:0x%d,seqno:0x%x,cksum:0x%x] newer than LSP: %s",
 					db, lifetime, seqno, cksum, lsp)
+
 				// 7.3.15.2: b4 Request newer.
 				db.setFlag(SSN, &elspid, c)
 				if c.IsP2P() {
@@ -1028,7 +1040,7 @@ func (db *DB) handleDataC(req interface{}) {
 			in.result <- false
 			break
 		}
-		lsp.getUpdLifetime()
+		lsp.getUpdLifetime(true)
 		copy(in.ent, lsp.hdr[clns.HdrLSPLifetime:clns.HdrLSPFlags])
 		in.result <- true
 	case inputGetLSP:
@@ -1037,7 +1049,7 @@ func (db *DB) handleDataC(req interface{}) {
 			in.result <- 0
 			break
 		}
-		lsp.getUpdLifetime()
+		lsp.getUpdLifetime(true)
 		in.result <- copy(in.payload, lsp.payload)
 	default:
 		panic(fmt.Sprintf("%s: unexpected GetDataC value %v", in))
