@@ -405,6 +405,11 @@ func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
 		return NEWER
 	}
 
+	// Do a quick check to see if this is the same memory.
+	if tlv.GetOffset(lsp.payload[clns.HdrCLNSSize+clns.HdrLSPLifetime:], e) == 0 {
+		return SAME
+	}
+
 	nseqno := pkt.GetUInt32(e[tlv.SNPEntSeqNo:])
 	oseqno := lsp.getSeqNo()
 	if nseqno > oseqno {
@@ -660,6 +665,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 					// life to cause long zero age purge.
 					if lsp.life == nil {
 						lsp.life = lsp.zeroLife
+						lsp.zeroLife = nil
 					}
 					db.initiatePurgeLSP(lsp, false)
 					return
