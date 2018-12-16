@@ -1,16 +1,17 @@
-//
 // -*- coding: utf-8 -*-
 //
 // November 20 2018, Christian Hopps <chopps@gmail.com>
-//
-//
+
+// Package update implements the update process of the IS-IS routing protocol.
+// This file contains code for implementing IS-IS flooding flags.
 package update
 
 import "github.com/choppsv1/goisis/clns"
 
-// IS-IS flooding flags.
+// SxxFlag is an IS-IS flooding flag (but not a bit flag).
 type SxxFlag uint8
 
+// Values for SxxFlag
 const (
 	SRM SxxFlag = iota
 	SSN
@@ -28,18 +29,19 @@ func (f SxxFlag) String() string {
 
 // ChgSxxFlag is used for sending flag operations on channels.
 type ChgSxxFlag struct {
-	Flag  SxxFlag     // flag to set or clear
-	Li    clns.LIndex // level index
-	Set   bool        // set or clear
-	All   bool        // all or single link
 	C     interface{} // if all then not this link otherwise this link only
 	Lspid clns.LSPID
+	Set   bool        // set or clear
+	All   bool        // all or single link
+	Flag  SxxFlag     // flag to set or clear
+	Li    clns.LIndex // level index
 }
 
 //
 // Flag owners
 //
 
+// FlagSet is the type used for tracking flags.
 type FlagSet map[clns.LSPID]struct{}
 
 // Add key to set, return true if was set, false if newly set.
