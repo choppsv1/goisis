@@ -8,15 +8,15 @@ package update
 
 import (
 	"github.com/choppsv1/goisis/clns"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/tlv"
 	"time"
 )
 
-type OwnLSP struct {
+type ownLSP struct {
 	Pnid      uint8
 	li        clns.LIndex
-	l         clns.Level
 	db        *DB
 	c         Circuit
 	segments  map[uint8][]byte
@@ -24,8 +24,8 @@ type OwnLSP struct {
 }
 
 // NewOwnLSP creates a new OwnLSP for the router.
-func NewOwnLSP(pnid byte, db *DB, c Circuit) *OwnLSP {
-	lsp := &OwnLSP{
+func newOwnLSP(pnid byte, db *DB, c Circuit) *ownLSP {
+	lsp := &ownLSP{
 		Pnid:     pnid,
 		li:       db.li,
 		db:       db,
@@ -40,20 +40,20 @@ func NewOwnLSP(pnid byte, db *DB, c Circuit) *OwnLSP {
 	// We delay generating non-pnode a short time to gather startup changes.
 	delay := LSPGenDelay
 	if pnid == 0 {
-		// We only long delay for our own (non-pnode) OwnLSP.
+		// We only long delay for our own (non-pnode) ownLSP.
 		delay = LSPCreateGenDelay
 	}
 	lsp.regenWait = time.AfterFunc(delay,
 		func() { db.chgLSPC <- chgLSP{timer: true, pnid: pnid} })
 
-	lsp.db.debug("%s: OwnLSP pnid %d generation scheduled %s", lsp.li, pnid, delay)
+	Debug(DbgFUpd, "%s: OwnLSP pnid %d generation scheduled %s", lsp.li, pnid, delay)
 
 	return lsp
 }
 
 // finishSegment update the LSP segment header prior to pushing out.
 // send previous buffer to the update process.
-func (lsp *OwnLSP) finishSegment(payload []byte, i uint8) error {
+func (lsp *ownLSP) finishSegment(payload []byte, i uint8) error {
 	lsp.segments[i] = payload
 
 	clns.InitHeader(payload, clns.LSPTypeMap[lsp.db.li])
@@ -78,7 +78,7 @@ func (lsp *OwnLSP) finishSegment(payload []byte, i uint8) error {
 }
 
 func (db *DB) purgeOwn(pnid, segid uint8) {
-	db.debug("%s: Purge own segment: %x-%x", db, pnid, segid)
+	Debug(DbgFUpd, "%s: Purge own segment: %x-%x", db, pnid, segid)
 
 	lspid := clns.MakeLSPID(db.sysid, pnid, segid)
 	lsp := db.db[lspid]
@@ -89,9 +89,9 @@ func (db *DB) purgeOwn(pnid, segid uint8) {
 	db.initiatePurgeLSP(lsp, false)
 }
 
-// regenerate non-pnode OwnLSP
-func (lsp *OwnLSP) regenNonPNodeLSP() error {
-	lsp.db.debug("%s: Non-PN OwnLSP Generation starts", lsp.li)
+// regenerate non-pnode ownLSP
+func (lsp *ownLSP) regenNonPNodeLSP() error {
+	Debug(DbgFUpd, "%s: Non-PN OwnLSP Generation starts", lsp.li)
 
 	oldseg := lsp.segments
 	lsp.segments = make(map[uint8][]byte)
@@ -103,19 +103,18 @@ func (lsp *OwnLSP) regenNonPNodeLSP() error {
 
 	if lsp.li.ToLevel() == 2 {
 		if err := bt.AddAreas(lsp.db.areas); err != nil {
-			lsp.db.debug("Error adding area TLV: %s", err)
+			Debug(DbgFUpd, "Error adding area TLV: %s", err)
 			return err
 		}
 	}
 	if err := bt.AddNLPID(lsp.db.nlpid); err != nil {
-		lsp.db.debug("Error adding NLPID TLV: %s", err)
+		Debug(DbgFUpd, "Error adding NLPID TLV: %s", err)
 		return err
 	}
 
 	// Add Hostname, ignore error.
 	if err := bt.AddHostname(lsp.db.hostname); err != nil {
-		// XXX warning instead of debug?
-		lsp.db.debug("Error adding Hostname TLV: %s", err)
+		Info("ERROR: adding Hostname TLV: %s", err)
 	}
 
 	if err := bt.AddIntfAddrs(lsp.db.addrs(true)); err != nil {
@@ -139,8 +138,8 @@ func (lsp *OwnLSP) regenNonPNodeLSP() error {
 	}
 
 	// Now purge any unsupported segments.
-	lsp.db.debug("%s: Purge own unsupported segments", lsp.li)
-	for segid, _ := range oldseg {
+	Debug(DbgFUpd, "%s: Purge own unsupported segments", lsp.li)
+	for segid := range oldseg {
 		_, present := lsp.segments[segid]
 		if !present {
 			lsp.db.purgeOwn(0, segid)
@@ -150,15 +149,15 @@ func (lsp *OwnLSP) regenNonPNodeLSP() error {
 }
 
 // purge the LSP we no longer support.
-func (lsp *OwnLSP) purge() {
-	for segid, _ := range lsp.segments {
+func (lsp *ownLSP) purge() {
+	for segid := range lsp.segments {
 		lsp.db.purgeOwn(lsp.Pnid, segid)
 	}
 }
 
-// regenerate pnode OwnLSP
-func (lsp *OwnLSP) regenPNodeLSP() error {
-	lsp.db.debug("%s: PN OwnLSP Generation starts", lsp.li)
+// regenerate pnode ownLSP
+func (lsp *ownLSP) regenPNodeLSP() error {
+	Debug(DbgFUpd, "%s: PN OwnLSP Generation starts", lsp.li)
 
 	// Ext Reach
 
@@ -167,7 +166,7 @@ func (lsp *OwnLSP) regenPNodeLSP() error {
 	// return bt.Close()
 
 	// // Now purge any unsupported segments.
-	// lsp.db.debug("%s: Purge own unsupported segments", lsp.li)
+	// Debug(DbgFUpd, "%s: Purge own unsupported segments", lsp.li)
 	// for segid, _ := range oldseg {
 	// 	_, present := lsp.segments[segid]
 	// 	if !present {
@@ -177,8 +176,8 @@ func (lsp *OwnLSP) regenPNodeLSP() error {
 	// }
 }
 
-// regenLSP regenerates the OwnLSP.
-func (lsp *OwnLSP) regenLSP() error {
+// regenLSP regenerates the ownLSP.
+func (lsp *ownLSP) regenLSP() error {
 	if lsp.Pnid > 0 {
 		return lsp.regenPNodeLSP()
 	} else {

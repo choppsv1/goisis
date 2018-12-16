@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"os"
 	"strings"
 	"time"
@@ -20,7 +21,7 @@ var GlbISType clns.LevelFlag
 // GlbSystemID is the system ID of this IS-IS instance
 var GlbSystemID []byte
 
-// GlbSystemID is the system ID of this IS-IS instance
+// GlbHostname is the hostname of this IS-IS instance
 var GlbHostname string
 
 // GlbAreaIDs is the slice of our area IDs
@@ -29,12 +30,6 @@ var GlbAreaIDs [][]byte
 // GlbNLPID holds an array of the NLPID that we support
 // var GlbNLPID = []byte{clns.NLPIDIPv4}
 var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
-
-// GlbDebug are the enabled debugs.
-var GlbDebug DbgFlags
-
-// GlbTrace are the enabled traces.
-var GlbTrace DbgFlags
 
 // GlbQuit is a channel to signal go routines should end
 var GlbQuit = make(chan bool)
@@ -48,6 +43,7 @@ func splitArg(argp *string) []string {
 	})
 }
 
+// nolint: gocyclo
 func main() {
 	var err error
 
@@ -55,11 +51,11 @@ func main() {
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
 	areaIDPtr := flag.String("area", "00", "area of this instance")
-	dbgIDPtr := flag.String("debug", "",
+	debugPtr := flag.String("debug", "",
 		"strsep list of debug flags: all or adj,dis,flags,packet,update")
 	isTypePtr := flag.String("istype", "l-1", "l-1, l-1-2, l-2-only")
 	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
-	traceIDPtr := flag.String("trace", "",
+	tracePtr := flag.String("trace", "",
 		"strsep list of debug flags: all or adj,dis,flags,packet,update")
 	flag.Parse()
 
@@ -68,36 +64,8 @@ func main() {
 		return
 	}
 
-	// Initialize trace flags.
-	if strings.Compare(*traceIDPtr, "all") == 0 {
-		for fstr := range FlagNames {
-			GlbTrace |= FlagNames[fstr]
-		}
-	} else {
-		for _, s := range splitArg(traceIDPtr) {
-			flag, ok := FlagNames[s]
-			if !ok {
-				fmt.Printf("Unknown trace flag: %s\n", s)
-				continue
-			}
-			GlbTrace |= flag
-		}
-	}
-
-	// Initialize debug flags.
-	if strings.Compare(*dbgIDPtr, "all") == 0 {
-		for s := range FlagNames {
-			GlbDebug |= FlagNames[s]
-		}
-	} else {
-		for _, s := range splitArg(dbgIDPtr) {
-			flag, ok := FlagNames[s]
-			if !ok {
-				fmt.Printf("Unknown debug flag: %s\n", s)
-				continue
-			}
-			GlbDebug |= flag
-		}
+	if err = InitLogging(tracePtr, debugPtr); err != nil {
+		panic(err)
 	}
 
 	// Initialize instance type
@@ -112,7 +80,7 @@ func main() {
 		GlbISType = clns.L1Flag | clns.L2Flag
 		break
 	default:
-		panic(fmt.Sprintf("Invalid istype %s", *isTypePtr))
+		Panicf("Invalid istype %s", *isTypePtr)
 	}
 	fmt.Printf("IS-IS %s router\n", GlbISType)
 
@@ -133,7 +101,7 @@ func main() {
 	}
 
 	if h, err := os.Hostname(); err != nil {
-		info("WARNING: Error getting hostname: %s", err)
+		Info("WARNING: Error getting hostname: %s", err)
 	} else {
 		GlbHostname = h
 	}
@@ -147,16 +115,10 @@ func main() {
 	// Initialize Update Process
 
 	var updb [2]*update.DB
-	dbdebug := func(format string, a ...interface{}) {}
-	if debugIsSet(DbgFUpd) {
-		dbdebug = func(format string, a ...interface{}) {
-			debug(DbgFUpd, format, a...)
-		}
-	}
 	for l := clns.Level(1); l <= 2; l++ {
 		if GlbISType.IsLevelEnabled(l) {
 			li := l.ToIndex()
-			updb[li] = update.NewDB(GlbSystemID[:], GlbISType, l, GlbAreaIDs, GlbNLPID, dbdebug)
+			updb[li] = update.NewDB(GlbSystemID[:], GlbISType, l, GlbAreaIDs, GlbNLPID)
 		}
 	}
 
@@ -170,13 +132,13 @@ func main() {
 		fmt.Printf("Adding LAN link: %q\n", ifname)
 		_, err = cdb.NewCircuit(ifname, GlbISType, updb)
 		if err != nil {
-			panicf("Error creating circuit: %s\n", err)
+			Panicf("Error creating circuit: %s\n", err)
 		}
 	}
 
 	ticker := time.NewTicker(time.Second * 120)
 	for _ = range ticker.C {
-		info("Keep Alive\n")
+		Info("Keep Alive\n")
 	}
 
 	close(GlbQuit)

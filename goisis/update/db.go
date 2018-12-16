@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
@@ -80,7 +81,7 @@ func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSe
 
 	db.db[lsp.lspid] = lsp
 
-	db.debug("%s: New LSP: %s", db, lsp)
+	Debug(DbgFUpd, "%s: New LSP: %s", db, lsp)
 	return lsp
 }
 
@@ -98,15 +99,13 @@ func (db *DB) newZeroLSPSegment(lifetime uint16, lspid *clns.LSPID, cksum uint16
 
 	db.db[lsp.lspid] = lsp
 
-	db.debug("%s: New Zero SeqNo LSP: %s", db, lsp)
+	Debug(DbgFUpd, "%s: New Zero SeqNo LSP: %s", db, lsp)
 	return lsp
 }
 
 // updateLSPSegment updates an lspSegment with a newer version received on a link.
 func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
-	if db.debug != nil {
-		db.debug("%s: Updating %s", db, lsp)
-	}
+	Debug(DbgFUpd, "%s: Updating %s", db, lsp)
 
 	// On entering the hold timer has already been stopped by receiveLSP
 
@@ -128,7 +127,7 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 		}
 		if lsp.zeroLife == nil {
 			// New purge.
-			db.debug("%s: Received Purge LSP %s", db, lsp)
+			Debug(DbgFUpd, "%s: Received Purge LSP %s", db, lsp)
 			lsp.zeroLife = xtime.NewHoldTimer(clns.ZeroMaxAge,
 				func() { db.expireC <- lsp.lspid })
 		} else if lsp.zeroLife.Until() < clns.ZeroMaxAge {
@@ -147,7 +146,7 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 	if lsp.life != nil {
 		// Reset the hold timer -- XXX are we always supposed to do this?
 		lsp.life.Reset(lifetime)
-		db.debug("%s: Reset hold timer %d for %s", db, lifetime, lsp)
+		Debug(DbgFUpd, "%s: Reset hold timer %d for %s", db, lifetime, lsp)
 	} else {
 		// We should never see both nil we would have deleted it.
 		if lsp.zeroLife == nil {
@@ -158,7 +157,7 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 		lsp.zeroLife.Stop()
 		lsp.zeroLife = nil
 		lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
-		db.debug("%s: Reset hold timer for Purged %s", db, lsp)
+		Debug(DbgFUpd, "%s: Reset hold timer for Purged %s", db, lsp)
 	}
 
 	// XXX update refresh timer?
@@ -172,7 +171,7 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 	//      lsp.refreshTimer.Reset(timeleft)
 	// }
 
-	db.debug("%s: Updated %s", db, lsp)
+	Debug(DbgFUpd, "%s: Updated %s", db, lsp)
 }
 
 // initiatePurgeLSP initiates a purge of an LSPSegment due to lifetime running
@@ -186,7 +185,7 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	} else {
 		if !fromTimer && !lsp.life.Stop() {
 			// Can't stop the timer we will be called again.
-			db.debug("%s: Can't stop timer for %s let it happen", db, lsp)
+			Debug(DbgFUpd, "%s: Can't stop timer for %s let it happen", db, lsp)
 			return
 		}
 		// We hold on to LSPs that we force purge longer.
@@ -202,7 +201,7 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 
 	// Update the lifetime to zero if it wasn't already.
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], 0)
-	db.debug("%s: Purging %s zeroMaxAge: %d", db, lsp, zeroMaxAge)
+	Debug(DbgFUpd, "%s: Purging %s zeroMaxAge: %d", db, lsp, zeroMaxAge)
 
 	if lsp.zeroLife != nil {
 		panic("Initiating a purge on a purged LSP.")
@@ -220,9 +219,9 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 
 	// b) Retain only LSP header. XXX we need more space for auth and purge tlv
 	pdulen := uint16(clns.HdrCLNSSize + clns.HdrLSPSize)
-	db.debug("Shrinking lsp.payload %d:%d to %d", len(lsp.payload), cap(lsp.payload), pdulen)
+	Debug(DbgFUpd, "Shrinking lsp.payload %d:%d to %d", len(lsp.payload), cap(lsp.payload), pdulen)
 	lsp.payload = lsp.payload[:pdulen]
-	db.debug("Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
+	Debug(DbgFUpd, "Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
 }
@@ -230,7 +229,7 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 // Increment the sequence number for one of our own LSP segments, fixup the
 // header and inject into DB.
 func (db *DB) incSeqNo(payload []byte, seqno uint32) {
-	db.debug("%s Incrementing Own Seq No 0x%x", db, seqno)
+	Debug(DbgFUpd, "%s Incrementing Own Seq No 0x%x", db, seqno)
 
 	lspbuf := payload[clns.HdrCLNSSize:]
 
@@ -245,7 +244,7 @@ func (db *DB) incSeqNo(payload []byte, seqno uint32) {
 
 	tlvs, err := tlv.Data(lspbuf[clns.HdrLSPSize:]).ParseTLV()
 	if err != nil {
-		db.debug("%s Invalid TLV from ourselves", db)
+		Debug(DbgFUpd, "%s Invalid TLV from ourselves", db)
 		panic("Invalid TLV from ourselves")
 	}
 
@@ -305,7 +304,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 		result = NEWER
 	}
 
-	db.debug("%s: receiveLSP %s 0x%x dblsp %s compare %v isOurs %v fromUs %v", db, lspid, nseqno, lsp, result, isOurs, fromUs)
+	Debug(DbgFUpd, "%s: receiveLSP %s 0x%x dblsp %s compare %v isOurs %v fromUs %v", db, lspid, nseqno, lsp, result, isOurs, fromUs)
 
 	// b) If the LSP has zero Remaining Lifetime, perform the actions
 	//    described in 7.3.16.4. -- for LSPs not ours this is the same as
@@ -394,16 +393,16 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 	if result == NEWER {
 		if lsp != nil {
 			if c != nil {
-				db.debug("%s: Updating LSP from %s", db, c)
+				Debug(DbgFUpd, "%s: Updating LSP from %s", db, c)
 			} else {
-				db.debug("%s: Updating Own LSP", db)
+				Debug(DbgFUpd, "%s: Updating Own LSP", db)
 			}
 			db.updateLSPSegment(lsp, payload, tlvs)
 		} else {
 			if c != nil {
-				db.debug("%s: Added LSP from %s", db, c)
+				Debug(DbgFUpd, "%s: Added LSP from %s", db, c)
 			} else {
-				db.debug("%s: Added Own LSP", db)
+				Debug(DbgFUpd, "%s: Added Own LSP", db)
 			}
 			if nlifetime == 0 {
 				// 17.3.16.4: a
@@ -431,7 +430,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 			refresh := time.Second * time.Duration(nlifetime) * 3 / 4
 			// New refresh timer, old one has fired, is stopped or we don't care.
 			lsp.refresh = time.AfterFunc(refresh, func() { db.refreshC <- lspid })
-			db.debug("%s: setting refresh timer for %s to %s", db, lsp, refresh)
+			Debug(DbgFUpd, "%s: setting refresh timer for %s to %s", db, lsp, refresh)
 		}
 	} else if result == SAME {
 		// e2) Same - Stop sending and Acknowledge
@@ -465,7 +464,7 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 	// ISO10589: 8.3.15.2.b
 	entries, err := tlvs.SNPEntryValues()
 	if err != nil {
-		db.debug("%s: Error parsing SNP Entries: %s", db, err)
+		Debug(DbgFUpd, "%s: Error parsing SNP Entries: %s", db, err)
 		return
 	}
 
@@ -492,7 +491,7 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 			seqno := pkt.GetUInt32(e[tlv.SNPEntSeqNo:])
 			cksum := pkt.GetUInt16(e[tlv.SNPEntCksum:])
 			if lsp != nil {
-				db.debug("%s: SNP Entry [life:0x%d,seqno:0x%x,cksum:0x%x] newer than LSP: %s",
+				Debug(DbgFUpd, "%s: SNP Entry [life:0x%d,seqno:0x%x,cksum:0x%x] newer than LSP: %s",
 					db, lifetime, seqno, cksum, lsp)
 
 				// 7.3.15.2: b4 Request newer.
@@ -502,7 +501,7 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 				}
 			} else {
 				// 7.3.15.2: b5 Add zero seqno segment for missing
-				db.debug("%s: SNP Entry [life:0x%d,seqno:0x%x,cksum:0x%x] for missing LSPID: %s",
+				Debug(DbgFUpd, "%s: SNP Entry [life:0x%d,seqno:0x%x,cksum:0x%x] for missing LSPID: %s",
 					db, lifetime, seqno, cksum, elspid)
 				if lifetime != 0 && seqno != 0 && cksum != 0 {
 					_ = db.newZeroLSPSegment(lifetime, &elspid, cksum)
@@ -516,7 +515,7 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 		return
 	}
 
-	db.debug("%s: CSNP: Look for we have, they don'ts", db)
+	Debug(DbgFUpd, "%s: CSNP: Look for we have, they don'ts", db)
 
 	// 7.3.15.2.c Set SRM for all LSP we have that were not mentioned.
 
@@ -542,13 +541,13 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 		if !present {
 			lsp := db.db[lspid]
 
-			db.debug("%s: CSNP: Missing %s", db, lsp)
+			Debug(DbgFUpd, "%s: CSNP: Missing %s", db, lsp)
 			if lsp.seqNo() == 0 {
-				db.debug("%s: CSNP: Skipping zero seqno: LSPID: %s", db, lspid)
+				Debug(DbgFUpd, "%s: CSNP: Skipping zero seqno: LSPID: %s", db, lspid)
 				continue
 			}
 			if lsp.checkLifetime() == 0 {
-				db.debug("%s: CSNP: Skipping zero lifetime: LSPID: %s", db, lspid)
+				Debug(DbgFUpd, "%s: CSNP: Skipping zero lifetime: LSPID: %s", db, lspid)
 				continue
 			}
 			db.setFlag(SRM, &lspid, c)

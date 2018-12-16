@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
@@ -61,8 +62,7 @@ type DB struct {
 	dataC     chan interface{}
 	pduC      chan inputPDU
 	db        map[clns.LSPID]*lspSegment
-	ownlsp    map[uint8]*OwnLSP
-	debug     func(string, ...interface{})
+	ownlsp    map[uint8]*ownLSP
 }
 
 func (db *DB) String() string {
@@ -154,7 +154,7 @@ type disInfo struct {
 }
 
 // NewDB returns a new Update Process LSP database
-func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nlpid []byte, debug func(string, ...interface{})) *DB {
+func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nlpid []byte) *DB {
 	db := &DB{
 		istype:    istype,
 		li:        l.ToIndex(),
@@ -165,10 +165,9 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 		chgLSPC:   make(chan chgLSP, 10),
 		chgCC:     make(chan chgCircuit, 10),
 		chgDISC:   make(chan chgDIS, 10),
-		debug:     debug,
 		dis:       make(map[uint8]disInfo),
 		db:        make(map[clns.LSPID]*lspSegment),
-		ownlsp:    make(map[uint8]*OwnLSP),
+		ownlsp:    make(map[uint8]*ownLSP),
 		expireC:   make(chan clns.LSPID, 10),
 		refreshC:  make(chan clns.LSPID, 10),
 		csnpTickC: make(chan uint8, 10),
@@ -177,13 +176,13 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 	}
 
 	if h, err := os.Hostname(); err != nil {
-		db.debug("WARNING: Error getting hostname: %s", err)
+		Debug(DbgFUpd, "WARNING: Error getting hostname: %s", err)
 	} else {
 		db.hostname = h
 	}
 
 	// Create our own LSP
-	db.ownlsp[0] = NewOwnLSP(0, db, nil)
+	db.ownlsp[0] = newOwnLSP(0, db, nil)
 
 	copy(db.sysid[:], sysid)
 	go db.run()
@@ -214,7 +213,7 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 	// Check the length
 	if len(payload) > clns.LSPOrigBufSize {
 		s := fmt.Sprintf("TRAP: corruptedLSPReceived: %s len %d", c, len(payload))
-		db.debug(s)
+		Debug(DbgFUpd, s)
 		return ErrLSP(s)
 	}
 
@@ -225,7 +224,7 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 		if cksum != 0 {
 			fcksum := pkt.GetUInt16(lspbuf[clns.HdrLSPCksum:])
 			s := fmt.Sprintf("TRAP corruptedLSPReceived: %s got 0x%04x expect 0x%04x dropping", c, cksum, fcksum)
-			db.debug(s)
+			Debug(DbgFUpd, s)
 			return ErrLSP(s)
 		}
 	}
@@ -235,17 +234,17 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 	if btlv != nil {
 		if len(btlv) != 1 {
 			s := fmt.Sprintf("INFO: Incorrect LSPBufSize TLV count: %d", len(btlv))
-			db.debug(s)
+			Debug(DbgFUpd, s)
 			return ErrLSP(s)
 		}
 		val, err := btlv[0].LSPBufSizeValue()
 		if err != nil {
-			db.debug("XXX: LSPBufSizeValue error: %s", err)
+			Debug(DbgFUpd, "XXX: LSPBufSizeValue error: %s", err)
 			return err
 		}
 		if val != clns.LSPOrigBufSize {
 			s := fmt.Sprintf("TRAP: originatingLSPBufferSizeMismatch: %d", val)
-			db.debug(s)
+			Debug(DbgFUpd, s)
 			return ErrLSP(s)
 		}
 	}
@@ -254,7 +253,7 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 
 	var lspid clns.LSPID
 	copy(lspid[:], payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
-	db.debug("%s: Channeling LSP %s from %s to Update Process", db, lspid, c)
+	Debug(DbgFUpd, "%s: Channeling LSP %s from %s to Update Process", db, lspid, c)
 
 	db.pduC <- inputPDU{c, payload, pdutype, tlvs}
 	return nil
@@ -269,7 +268,7 @@ func (db *DB) InputSNP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 	// a.1-5 already done in receive 6 Check SNPA from an adj (use function)
 	// a.[78] check password/auth
 
-	db.debug("%s: Channeling SNP from %s to Update Process", db, c)
+	Debug(DbgFUpd, "%s: Channeling SNP from %s to Update Process", db, c)
 	db.pduC <- inputPDU{c, payload, pdutype, tlvs}
 	return nil
 }
@@ -394,62 +393,62 @@ func (db *DB) isOwnSupported(lspid clns.LSPID) bool {
 }
 
 func (db *DB) handleExpireC(lspid clns.LSPID) {
-	db.debug("1) <-expireC %s", lspid)
+	Debug(DbgFUpd, "1) <-expireC %s", lspid)
 	// Come in here 2 ways, either with zeroLifetime non-nil but
 	// expired in which case we should be good to remove, or nil
 	// b/c the hold timer fired for this LSP.
 	lsp, ok := db.db[lspid]
 	if !ok {
 		// it's gone we're done.
-		db.debug("Warning: <-expireC %s not present", lspid)
+		Debug(DbgFUpd, "Warning: <-expireC %s not present", lspid)
 		return
 	}
 
 	// Let's do a sanity check and make sure this isn't our own LSP that we support.
 	if db.isOwnSupported(lspid) {
-		db.debug("<-expireC: %s Expired without refresh! (timer: %v)", lsp, lsp.refresh != nil)
+		Debug(DbgFUpd, "<-expireC: %s Expired without refresh! (timer: %v)", lsp, lsp.refresh != nil)
 		if lsp.refresh != nil {
 			lsp.refresh.Stop()
 			lsp.refresh = nil
 		}
-		db.debug("<-expireC: %s Expired without refresh increment", lsp)
+		Debug(DbgFUpd, "<-expireC: %s Expired without refresh increment", lsp)
 		db.incSeqNo(lsp.payload, lsp.seqNo())
 		return
 	}
 
-	db.debug("2) <-expireC %s", lspid)
+	Debug(DbgFUpd, "2) <-expireC %s", lspid)
 	if lsp.life != nil {
 		if lsp.life.Until() != 0 {
-			db.debug("<-expireC: %s ressurected", lsp)
+			Debug(DbgFUpd, "<-expireC: %s ressurected", lsp)
 			return
 		}
 		// Done with timer.
 		lsp.life = nil
 	}
-	db.debug("3) <-expireC %s", lspid)
+	Debug(DbgFUpd, "3) <-expireC %s", lspid)
 	if pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:]) == 0 {
-		db.debug("Deleting Zero-SeqNo LSP %s", lspid)
+		Debug(DbgFUpd, "Deleting Zero-SeqNo LSP %s", lspid)
 		delete(db.db, lsp.lspid)
 	} else if lsp.zeroLife == nil {
-		db.debug("4) <-expireC %s", lspid)
+		Debug(DbgFUpd, "4) <-expireC %s", lspid)
 		db.initiatePurgeLSP(lsp, true)
 	} else {
-		db.debug("5) <-expireC %s", lspid)
+		Debug(DbgFUpd, "5) <-expireC %s", lspid)
 		// Purge complete
 		if lsp.life != nil {
 			panic("Non-zero lifetime in zero max age")
 		}
-		db.debug("6) <-expireC %s", lspid)
+		Debug(DbgFUpd, "6) <-expireC %s", lspid)
 		if lsp.zeroLife.Until() != 0 {
-			db.debug("<-expireC: zeroLife %s ressurected", lsp)
+			Debug(DbgFUpd, "<-expireC: zeroLife %s ressurected", lsp)
 		} else {
 			lsp.zeroLife = nil
-			db.debug("Deleting LSP %s", lsp)
+			Debug(DbgFUpd, "Deleting LSP %s", lsp)
 			delete(db.db, lsp.lspid)
 		}
-		db.debug("7) <-expireC %s", lspid)
+		Debug(DbgFUpd, "7) <-expireC %s", lspid)
 	}
-	db.debug("8) <-expireC %s", lspid)
+	Debug(DbgFUpd, "8) <-expireC %s", lspid)
 }
 
 // handleRefreshC handles timer events to refresh one of our LSP segments
@@ -532,11 +531,11 @@ func (db *DB) handleDataC(req interface{}) {
 }
 
 func (db *DB) handleChgDISC(in chgDIS) {
-	db.debug("%s: handle DIS change in: %v", db, in)
+	Debug(DbgFUpd, "%s: handle DIS change in: %v", db, in)
 
 	di, wasSet := db.dis[in.cid]
 	if wasSet && di.c == in.c {
-		db.debug("%s: No DIS change c: %v in: %v", db, di.c, in)
+		Debug(DbgFUpd, "%s: No DIS change c: %v in: %v", db, di.c, in)
 		return
 	}
 
@@ -547,12 +546,12 @@ func (db *DB) handleChgDISC(in chgDIS) {
 	if !wasSet && !elected {
 		// Indicate elected but not us.
 		db.dis[in.cid] = disInfo{}
-		db.debug("%s: No DIS set and we aren't elected on CID %d", db, in.cid)
+		Debug(DbgFUpd, "%s: No DIS set and we aren't elected on CID %d", db, in.cid)
 		return
 	}
 	if elected {
 		c := in.c
-		db.debug("%s: Elected DIS on %s", db, c.Name())
+		Debug(DbgFUpd, "%s: Elected DIS on %s", db, c.Name())
 
 		// Start sending CSNP
 		// XXX csnp interval hardcoded here.
@@ -563,7 +562,7 @@ func (db *DB) handleChgDISC(in chgDIS) {
 			}),
 		}
 
-		db.ownlsp[in.cid] = NewOwnLSP(in.cid, db, c)
+		db.ownlsp[in.cid] = newOwnLSP(in.cid, db, c)
 	} else {
 		// Stop the CSNP timer.
 		if di.timer != nil {
@@ -573,7 +572,7 @@ func (db *DB) handleChgDISC(in chgDIS) {
 
 		db.dis[in.cid] = disInfo{}
 
-		db.debug("%s: Resigned DIS on %s", db, c.Name())
+		Debug(DbgFUpd, "%s: Resigned DIS on %s", db, c.Name())
 		lsp := db.ownlsp[in.cid]
 		db.ownlsp[in.cid] = nil
 		lsp.purge()

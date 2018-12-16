@@ -7,6 +7,7 @@ import (
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/goisis/update"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/raw"
 	"github.com/choppsv1/goisis/tlv"
@@ -283,7 +284,7 @@ func (c *CircuitLAN) OpenFrame(dst net.HardwareAddr) (ether.Frame, []byte) {
 	copy(etherp[ether.HdrEthDest:], dst)
 	copy(etherp[ether.HdrEthSrc:], c.intf.HardwareAddr)
 
-	debug(DbgFPkt, "OpenFrame dst: %s, src: %s typelen %x\n",
+	Debug(DbgFPkt, "OpenFrame dst: %s, src: %s typelen %x\n",
 		etherp.GetDst(), etherp.GetSrc(), etherp.GetTypeLen())
 
 	llcp := etherp[ether.HdrEthSize:]
@@ -297,7 +298,7 @@ func (c *CircuitLAN) OpenFrame(dst net.HardwareAddr) (ether.Frame, []byte) {
 func CloseFrame(etherp ether.Frame, len int) ether.Frame {
 	etherp.SetTypeLen(len + ether.HdrLLCSize)
 	etherp = etherp[:ether.HdrEthSize+ether.HdrLLCSize+len]
-	debug(DbgFPkt, "CloseFrame dst: %s, src: %s framelen %d\n",
+	Debug(DbgFPkt, "CloseFrame dst: %s, src: %s framelen %d\n",
 		etherp.GetDst(), etherp.GetSrc(), etherp.GetTypeLen())
 	return etherp
 }
@@ -331,7 +332,7 @@ func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) ether.Frame {
 	etherp = etherp[0 : epayloadlen+ether.HdrEthSize]
 	etherp.SetTypeLen(epayloadlen)
 
-	debug(DbgFPkt, "Closing PDU with pdulen %d payload %d framelen %d",
+	Debug(DbgFPkt, "Closing PDU with pdulen %d payload %d framelen %d",
 		pdulen, epayloadlen, len(etherp))
 
 	return etherp
@@ -341,7 +342,7 @@ func (c *CircuitLAN) RecvHello(pdu *RecvPDU) {
 	li := pdu.pdutype.GetPDULIndex()
 	ll := c.levlink[li]
 	if ll == nil {
-		debug(DbgFPkt, "%s: Received %s IIH on %s circuit", c, pdu.pdutype, c.lf)
+		Debug(DbgFPkt, "%s: Received %s IIH on %s circuit", c, pdu.pdutype, c.lf)
 		return
 	}
 	ll.iihpkt <- pdu
@@ -349,7 +350,7 @@ func (c *CircuitLAN) RecvHello(pdu *RecvPDU) {
 }
 
 func (c *CircuitLAN) ChgFlag(flag update.SxxFlag, lspid *clns.LSPID, set bool, li clns.LIndex) {
-	c.levlink[li].flagsC <- ChgSxxFlag{
+	c.levlink[li].flagsC <- chgSxxFlag{
 		set:   set,
 		flag:  flag,
 		lspid: *lspid,

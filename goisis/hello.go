@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/tlv"
 	"net"
@@ -80,7 +81,7 @@ func (a *Adj) String() string {
 // StartHelloProcess starts a go routine to send and receive hellos, manage
 // adjacencies and elect DIS on LANs
 func StartHelloProcess(link *LinkLAN, quit <-chan bool) {
-	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, link.helloInt)
+	Debug(DbgFPkt, "Sending hellos on %s with interval %d", link, link.helloInt)
 	ival := time.Second * time.Duration(link.helloInt)
 	link.ticker = time.NewTicker(ival) // XXX replace with jittered timer.
 
@@ -95,21 +96,21 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 
 	sendLANHello(link)
 
-	debug(DbgFPkt, "Sent initial IIH on %s entering hello loop", link)
+	Debug(DbgFPkt, "Sent initial IIH on %s entering hello loop", link)
 	for {
 
 		var rundis bool
 		select {
 		case <-quit:
-			debug(DbgFPkt, "Stop sending IIH on %s", link)
+			Debug(DbgFPkt, "Stop sending IIH on %s", link)
 			return
 		case pdu := <-link.iihpkt:
 			rundis = pdu.link.RecvHello(pdu)
 		case srcid := <-link.expireC:
-			debug(DbgFAdj, "Adj for %s on %s expiring.", srcid, link)
+			Debug(DbgFAdj, "Adj for %s on %s expiring.", srcid, link)
 			a := link.srcidMap[srcid]
 			if a == nil {
-				debug(DbgFAdj, "Adj for %s on %s is already gone.", srcid, link)
+				Debug(DbgFAdj, "Adj for %s on %s is already gone.", srcid, link)
 				break
 			}
 			// If the adjacency was up then we need to rerun DIS election.
@@ -117,20 +118,20 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 			delete(link.snpaMap, a.snpa)
 			delete(link.srcidMap, a.sysid)
 		case <-link.disTimer.C:
-			debug(DbgFDIS, "INFO: DIS timer fires %s", link)
+			Debug(DbgFDIS, "INFO: DIS timer fires %s", link)
 			disWaiting = false
 			rundis = true
 		case <-link.ticker.C:
-			debug(DbgFPkt, "%s: IIH Tick Start", link)
+			Debug(DbgFPkt, "%s: IIH Tick Start", link)
 			sendLANHello(link)
-			debug(DbgFPkt, "%s: IIH Tick Done", link)
+			Debug(DbgFPkt, "%s: IIH Tick Done", link)
 		}
 
 		if rundis {
 			if disWaiting {
-				debug(DbgFDIS, "INFO: Suppress DIS elect on %s", link)
+				Debug(DbgFDIS, "INFO: Suppress DIS elect on %s", link)
 			} else {
-				debug(DbgFDIS, "INFO: DIS info changed on %s", link)
+				Debug(DbgFDIS, "INFO: DIS info changed on %s", link)
 				link.disElect(wasWaiting)
 				wasWaiting = false
 			}
@@ -145,7 +146,7 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 func (link *LinkLAN) getKnownSNPA() []net.HardwareAddr {
 	alist := make([]net.HardwareAddr, 0, len(link.srcidMap))
 	for _, a := range link.srcidMap {
-		debug(DbgFPkt, "Sending IIH Add Adj %s", a)
+		Debug(DbgFPkt, "Sending IIH Add Adj %s", a)
 		if a.State != AdjStateDown {
 			alist = append(alist, a.snpa[:])
 		}
@@ -157,7 +158,7 @@ func sendLANHello(link *LinkLAN) error {
 	var err error
 	var pdutype clns.PDUType
 
-	debug(DbgFPkt, "Sending IIH on %s", link)
+	Debug(DbgFPkt, "Sending IIH on %s", link)
 
 	if link.l == 1 {
 		pdutype = clns.PDUTypeIIHLANL1
@@ -187,13 +188,13 @@ func sendLANHello(link *LinkLAN) error {
 
 	if link.l == 1 {
 		if err = bt.AddAreas(GlbAreaIDs); err != nil {
-			debug(DbgFPkt, "Error adding area TLV: %s", err)
+			Debug(DbgFPkt, "Error adding area TLV: %s", err)
 			return err
 		}
 	}
 
 	if err = bt.AddNLPID(GlbNLPID); err != nil {
-		debug(DbgFPkt, "Error adding NLPID TLV: %s", err)
+		Debug(DbgFPkt, "Error adding NLPID TLV: %s", err)
 		return err
 	}
 
@@ -206,7 +207,7 @@ func sendLANHello(link *LinkLAN) error {
 	}
 
 	if err = bt.AddAdjSNPA(link.getKnownSNPA()); err != nil {
-		debug(DbgFPkt, "Error Adding SNPA: %s", err)
+		Debug(DbgFPkt, "Error Adding SNPA: %s", err)
 		return err
 	}
 
@@ -220,7 +221,7 @@ func sendLANHello(link *LinkLAN) error {
 	for cap(endp) > 1 {
 		endp, err = tlv.AddPadding(endp)
 		if err != nil {
-			debug(DbgFPkt, "Error adding Padding TLVs: %s", err)
+			Debug(DbgFPkt, "Error adding Padding TLVs: %s", err)
 			return err
 		}
 	}
@@ -241,14 +242,14 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 		// Update Areas
 		areas, err := pdu.tlvs[tlv.TypeAreaAddrs][0].AreaAddrsValue()
 		if err != nil {
-			logger.Printf("ERROR: processing Area Address TLV from %s: %s", a, err)
+			Info("ERROR: processing Area Address TLV from %s: %s", a, err)
 			return true
 		}
 		a.areas = areas
 	}
 
 	if a.holdTimer != nil && !a.holdTimer.Stop() {
-		debug(DbgFAdj, "%s failed to stop hold timer in time, letting expire", a)
+		Debug(DbgFAdj, "%s failed to stop hold timer in time, letting expire", a)
 		return false
 	}
 
@@ -273,7 +274,7 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 		for _, ntlv := range pdu.tlvs[tlv.TypeISNeighbors] {
 			addrs, err := ntlv.ISNeighborsValue()
 			if err != nil {
-				logger.Printf("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
+				Info("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
 				break
 			}
 			for _, snpa := range addrs {
@@ -288,12 +289,12 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 	if a.State != oldstate {
 		if a.State == AdjStateUp {
 			rundis = true
-			logger.Printf("TRAP: AdjacencyStateChange: Up: %s", a)
+			Trap("TRAP: AdjacencyStateChange: Up: %s", a)
 		} else if oldstate == AdjStateUp {
 			rundis = true
-			logger.Printf("TRAP: AdjacencyStateChange: Down: %s", a)
+			Trap("TRAP: AdjacencyStateChange: Down: %s", a)
 		}
-		debug(DbgFAdj, "New state %s for %s", a.State, a)
+		Debug(DbgFAdj, "New state %s for %s", a.State, a)
 	}
 
 	// Restart the hold timer.
@@ -308,7 +309,7 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 		a.holdTimer.Reset(time.Second * time.Duration(holdtime))
 	}
 
-	debug(DbgFAdj, "%s: Updated adjacency %s for SNPA %s from %s to %s rundis %v",
+	Debug(DbgFAdj, "%s: Updated adjacency %s for SNPA %s from %s to %s rundis %v",
 		a.link, a.sysid, a.snpa, oldstate, a.State, rundis)
 
 	return rundis
@@ -327,7 +328,7 @@ func (e ErrIIH) Error() string {
 
 // RecvLANHello receives IIH from on a given LAN link
 func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
-	debug(DbgFPkt, "IIH: processign from %s", pdu.src)
+	Debug(DbgFPkt, "IIH: processign from %s", pdu.src)
 	var rundis bool
 
 	tlvs := pdu.tlvs
@@ -341,12 +342,12 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 		// Expect 1 and only 1 Area TLV
 		atlv := tlvs[tlv.TypeAreaAddrs]
 		if len(atlv) != 1 {
-			trap("areaMismatch: Incorrect area TLV count: %d", len(atlv))
+			Trap("areaMismatch: Incorrect area TLV count: %d", len(atlv))
 			return rundis
 		}
 		addrs, err := atlv[0].AreaAddrsValue()
 		if err != nil {
-			trap("areaMismatch: Area TLV error: %s", err)
+			Trap("areaMismatch: Area TLV error: %s", err)
 			return rundis
 		}
 
@@ -362,7 +363,7 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 			}
 		}
 		if !matched {
-			trap("TRAP areaMismatch: no matching areas")
+			Trap("TRAP areaMismatch: no matching areas")
 			return rundis
 		}
 	}
@@ -413,28 +414,28 @@ func (link *LinkLAN) disFindBest() (bool, *Adj) {
 	count := 0
 	for _, a := range link.srcidMap {
 		if a.State != AdjStateUp {
-			debug(DbgFDIS, "%s skipping non-up adj %s", link, a)
+			Debug(DbgFDIS, "%s skipping non-up adj %s", link, a)
 			continue
 		}
 		count++
 		if a.priority > electPri {
-			debug(DbgFDIS, "%s adj %s better priority %d", link, a, a.priority)
+			Debug(DbgFDIS, "%s adj %s better priority %d", link, a, a.priority)
 			elect = a
 			electPri = a.priority
 			electID = a.sysid[:]
 		} else if a.priority == electPri {
-			debug(DbgFDIS, "%s adj %s same priority %d", link, a, a.priority)
+			Debug(DbgFDIS, "%s adj %s same priority %d", link, a, a.priority)
 			if bytes.Compare(a.sysid[:], electID) > 0 {
 				elect = a
 				electPri = a.priority
 				electID = a.sysid[:]
 			}
 		} else {
-			debug(DbgFDIS, "%s adj %s worse priority %d", link, a, a.priority)
+			Debug(DbgFDIS, "%s adj %s worse priority %d", link, a, a.priority)
 		}
 	}
 	if count == 0 {
-		debug(DbgFDIS, "%s no adj, no dis", link)
+		Debug(DbgFDIS, "%s no adj, no dis", link)
 		// No adjacencies, no DIS
 		return false, nil
 	}
@@ -470,7 +471,7 @@ func (link *LinkLAN) disSelfResign() {
 }
 
 func (link *LinkLAN) disElect(firstRun bool) {
-	debug(DbgFDIS, "Running DIS election on %s first time %v", link, firstRun)
+	Debug(DbgFDIS, "Running DIS election on %s first time %v", link, firstRun)
 
 	var newLANID clns.NodeID
 	var oldLANID clns.NodeID
@@ -480,21 +481,21 @@ func (link *LinkLAN) disElect(firstRun bool) {
 
 	electUs, electOther := link.disFindBest()
 	if electUs {
-		debug(DbgFDIS, "%s electUS", link)
+		Debug(DbgFDIS, "%s electUS", link)
 		newLANID = link.ourlanID
 	} else if electOther != nil {
-		debug(DbgFDIS, "%s electOther %s", link, electOther)
+		Debug(DbgFDIS, "%s electOther %s", link, electOther)
 		newLANID = electOther.lanID
 	} else {
-		debug(DbgFDIS, "%s elect None!", link)
+		Debug(DbgFDIS, "%s elect None!", link)
 	}
 
 	if oldLANID == newLANID {
-		debug(DbgFDIS, "Same DIS elected: %s", newLANID)
+		Debug(DbgFDIS, "Same DIS elected: %s", newLANID)
 		return
 	}
 
-	debug(DbgFDIS, "DIS change: old %s new %s", oldLANID, newLANID)
+	Debug(DbgFDIS, "DIS change: old %s new %s", oldLANID, newLANID)
 
 	// newLANID may be 0s if no-one elected.
 	link.lanID = newLANID

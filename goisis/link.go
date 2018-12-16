@@ -6,6 +6,7 @@ import (
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
 	"github.com/choppsv1/goisis/goisis/update"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/tlv"
 	"net"
 	"time"
@@ -38,22 +39,14 @@ type Link interface {
 // Types
 // =====
 
-// SendLSP is the value passed on the sendLSP channel
-type SendLSP struct {
-	li    clns.LIndex
-	lspid clns.LSPID
-}
-
-type ChgSxxFlag struct {
+type chgSxxFlag struct {
 	set   bool // set or clear
 	flag  update.SxxFlag
 	lspid clns.LSPID
 }
 
-//
 // LinkLAN is a structure holding information on a IS-IS Specific level
 // operation on a LAN link.
-//
 type LinkLAN struct {
 	circuit *CircuitLAN
 	l       clns.Level
@@ -78,7 +71,7 @@ type LinkLAN struct {
 
 	// Update Process
 	updb   *update.DB
-	flagsC chan ChgSxxFlag
+	flagsC chan chgSxxFlag
 	flags  [2]update.FlagSet
 }
 
@@ -102,7 +95,7 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 		iihpkt:   make(chan *RecvPDU, 3),
 		snpaMap:  make(map[clns.SNPA]*Adj),
 		srcidMap: make(map[clns.SystemID]*Adj),
-		flagsC:   make(chan ChgSxxFlag, 10),
+		flagsC:   make(chan chgSxxFlag, 10),
 		flags:    [2]update.FlagSet{make(update.FlagSet), make(update.FlagSet)},
 	}
 	lanLinkCircuitIDs[li]++
@@ -130,14 +123,17 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 	return link
 }
 
+// IsP2P returns true if this link is operating in P2P mode.
 func (link *LinkLAN) IsP2P() bool {
 	return false
 }
 
+// GetOurSNPA returns the link's MAC address
 func (link *LinkLAN) GetOurSNPA() net.HardwareAddr {
 	return link.circuit.CircuitBase.intf.HardwareAddr
 }
 
+// ExpireAdj cause the adjacency to expire.
 func (link *LinkLAN) ExpireAdj(sysid clns.SystemID) {
 	link.expireC <- sysid
 }
@@ -150,22 +146,25 @@ func (link *LinkLAN) ExpireAdj(sysid clns.SystemID) {
 // Flooding
 // --------
 
+// SRM update flag
 var SRM = update.SRM
+
+// SSN update flag
 var SSN = update.SSN
 
 func (link *LinkLAN) changeFlag(flag update.SxxFlag, set bool, lspid *clns.LSPID) {
 	if set {
-		debug(DbgFFlags, "%s: Real set of %s for %s", link, flag, *lspid)
+		Debug(DbgFFlags, "%s: Real set of %s for %s", link, flag, *lspid)
 		link.flags[flag][*lspid] = struct{}{}
 	} else {
-		debug(DbgFFlags, "%s: Real clear of %s for %s", link, flag, *lspid)
+		Debug(DbgFFlags, "%s: Real clear of %s for %s", link, flag, *lspid)
 		delete(link.flags[flag], *lspid)
 	}
 }
 
 func (link *LinkLAN) waitFlags() {
 	// XXX add a timer/ticker here to handle LSP flood pacing.
-	debug(DbgFFlags, "%s: Waiting for flag changes", link)
+	Debug(DbgFFlags, "%s: Waiting for flag changes", link)
 	select {
 	case cf := <-link.flagsC:
 		link.changeFlag(cf.flag, cf.set, &cf.lspid)
@@ -200,7 +199,7 @@ func (link *LinkLAN) fillSNP(tlvp tlv.Data) tlv.Data {
 		if ok := link.updb.CopyLSPSNP(&lspid, p); ok {
 			link.changeFlag(SSN, false, &lspid)
 		} else {
-			debug(DbgFFlags, "%s: LSP SSN with no LSP for %s", link, lspid)
+			Debug(DbgFFlags, "%s: LSP SSN with no LSP for %s", link, lspid)
 		}
 	}
 	return track.Close()
@@ -236,11 +235,11 @@ func (link *LinkLAN) sendAnLSP() {
 		link.changeFlag(SRM, false, &lspid)
 		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.li])
 		if l := link.updb.CopyLSPPayload(&lspid, payload); l != 0 {
-			debug(DbgFFlags, "%s SENDING LSP %s len %d", link, lspid, l)
+			Debug(DbgFFlags, "%s SENDING LSP %s len %d", link, lspid, l)
 			link.circuit.outpkt <- CloseFrame(etherp, l)
 			break
 		}
-		debug(DbgFFlags, "%s SRM set no LSP %s\n", link, lspid)
+		Debug(DbgFFlags, "%s SRM set no LSP %s\n", link, lspid)
 	}
 }
 
@@ -249,7 +248,7 @@ func (link *LinkLAN) processFlags() {
 	for {
 		link.waitFlags()
 		count := link.gatherFlags() + 1
-		debug(DbgFFlags, "%s Gathered %d flags", link, count)
+		Debug(DbgFFlags, "%s Gathered %d flags", link, count)
 		for len(link.flags[SRM]) != 0 || len(link.flags[SSN]) != 0 {
 			link.sendAllPSNP()
 			link.sendAnLSP()
