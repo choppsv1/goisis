@@ -376,7 +376,7 @@ type BufferTrack struct {
 
 	// Private
 	offset uint
-	finish func(Data, uint) error
+	finish func(Data, uint8) error
 	t      Track
 }
 
@@ -385,7 +385,7 @@ type BufferTrack struct {
 // 'max' is the maximum number of buffers. 'finish' is a function to initialize
 // the header and further process the buffer (likely update the Update Process
 // with new LSP segment data)
-func NewBufferTrack(size, offset, max uint, finish func(Data, uint) error) *BufferTrack {
+func NewBufferTrack(size, offset, max uint, finish func(Data, uint8) error) *BufferTrack {
 	bt := &BufferTrack{
 		Max:     max,
 		Size:    size,
@@ -413,7 +413,7 @@ func (bt *BufferTrack) closeBuffer() error {
 	last := bt.Buffers[count-1]
 	pstart := last.Hdr
 	sz := GetOffset(pstart, last.Endp)
-	return bt.finish(pstart[:sz], uint(count-1))
+	return bt.finish(pstart[:sz], uint8(count)-1)
 }
 
 func (bt *BufferTrack) newBuffer() error {

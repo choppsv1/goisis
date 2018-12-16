@@ -113,12 +113,12 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 	// Record our SNPA in the map of our SNPA
 	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true
 
-	// Start Sending Hellos
-	StartHelloProcess(link, link.helloInt, quit)
-
 	// Start DIS election routine
 	dur := time.Second * time.Duration(link.helloInt*2)
 	link.disTimer = time.NewTimer(dur)
+
+	// Start Sending Hellos
+	StartHelloProcess(link, link.helloInt, quit)
 
 	go link.processFlags()
 

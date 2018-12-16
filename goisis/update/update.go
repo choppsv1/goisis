@@ -49,6 +49,7 @@ type DB struct {
 	chgDISC  chan chgDIS
 	chgLSPC  chan chgLSP
 	expireC  chan clns.LSPID
+	refreshC chan clns.LSPID
 	dataC    chan interface{}
 	pduC     chan inputPDU
 	db       map[clns.LSPID]*lspSegment
@@ -112,6 +113,7 @@ type lspSegment struct {
 	lspid    clns.LSPID
 	life     *xtime.HoldTimer
 	zeroLife *xtime.HoldTimer
+	refresh  *time.Timer
 	isAck    bool
 	isOurs   bool
 }
@@ -152,6 +154,7 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 		db:       make(map[clns.LSPID]*lspSegment),
 		ownlsp:   make(map[uint8]*LSP),
 		expireC:  make(chan clns.LSPID),
+		refreshC: make(chan clns.LSPID),
 		dataC:    make(chan interface{}),
 		pduC:     make(chan inputPDU),
 	}
@@ -556,6 +559,12 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 		lsp.life = nil
 	}
 
+	// Get rid of refresh timer for our own LSP segments.
+	if lsp.refresh != nil {
+		lsp.refresh.Stop()
+		lsp.refresh = nil
+	}
+
 	// Update the lifetime to zero if it wasn't already.
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], 0)
 	db.debug("%s: Purging %s zeroMaxAge: %d", db, lsp, zeroMaxAge)
@@ -585,6 +594,9 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 
 // receiveLSP receives an LSP from flooding
 func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
+	// We input or own LSP here with nil circuit to differentiate.
+	fromUs := c == nil
+
 	var lspid clns.LSPID
 	copy(lspid[:], payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
 
@@ -596,13 +608,20 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 	result := compareLSP(lsp, newhdr[clns.HdrLSPLifetime:])
 	isOurs := bytes.Equal(lspid[:clns.SysIDLen], db.sysid[:])
 
+	if isOurs && fromUs {
+		// Force newer b/c we may have simply modified the db version of
+		// the segment to increment the seqno so it won't seem newer.
+		result = NEWER
+	}
+
+	db.debug("%s: receiveLSP %s 0x%x dblsp %s compare %v isOurs %v fromUs %v", db, lspid, pkt.GetUInt32(newhdr[clns.HdrLSPSeqNo:]), lsp, result, isOurs, fromUs)
+
 	// b) If the LSP has zero Remaining Lifetime, perform the actions
 	//    described in 7.3.16.4. -- for LSPs not ours this is the same as
 	//    normal handling except that we do not add a missing LSP segment,
 	//    instead we acknowledge receipt only.
 
-	// We input or own LSP here with nil circuit to differentiate.
-	if isOurs && c != nil {
+	if isOurs && !fromUs {
 		// XXX check all this.
 		pnid := lsp.lspid[7]
 		var unsupported bool
@@ -612,19 +631,38 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 			c, set := db.dis[pnid]
 			unsupported = lsp == nil || c == nil
 			if !set {
-				// We haven't decided who is DIS yet. We may not
-				// want to purge until we have.
-				// XXX
+				// We haven't run dis election yet, hold off
+				// on purging until we have.
+				return
 			}
 		}
+
 		// c) Ours, but we don't support, and not expired, perform
 		//    7.3.16.4 purge. If ours not supported and expired we will
 		//    simply be ACKing the receipt below under e1.
 		if unsupported && nlifetime != 0 {
 			if lsp != nil {
-				// XXX check this panic out closer. XXX
-				if result != NEWER || lsp.getUpdLifetime() == 0 {
-					panic("Bad branch")
+				// assert c == nil i.e., We have no circuit
+				// associated with this DIS circuit ID claiming
+				// to be ours.
+
+				// Since we purge when we un-elect ourselves
+				// any unsupported but present PN-LSP should be
+				// purging.
+
+				// A bad actor might inject a newer seqno for
+				// our unsupported purging LSP so we need to
+				// update the seqno, and purge again.
+				seqno := pkt.GetUInt32(newhdr[clns.HdrLSPSeqNo:])
+				if result == NEWER {
+					pkt.PutUInt32(lsp.hdr[clns.HdrLSPSeqNo:], seqno)
+					// Swap the zero life timer into normal
+					// life to cause long zero age purge.
+					if lsp.life == nil {
+						lsp.life = lsp.zeroLife
+					}
+					db.initiatePurgeLSP(lsp, false)
+					return
 				}
 			} else {
 				// Create LSP and then force purge.
@@ -637,10 +675,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 		// d) Ours, supported and wire is newer, need to increment our
 		// copy per 7.3.16.1
 		if !unsupported && result == NEWER {
-			// If this is supported we better have a non-expired LSP in the DB.
-			//assert dblsp
-			//assert dblsp.lifetime
-			//self._update_own_lsp(dblsp.pdubuf, dblsp.tlvs, frame.seqno)
+			db.incSeqNo(lsp.payload, lsp.getSeqNo())
 			return
 		}
 
@@ -649,7 +684,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 	// [ also: ISO 10589 17.3.16.4: a, b ]
 	// e1) Newer - update db, flood and acknowledge
 	//     [ also: ISO 10589 17.3.16.4: b.1 ]
-	if result == NEWER {
+	if result == NEWER && !fromUs {
 		if lsp != nil && lsp.life != nil {
 			if !lsp.life.Stop() {
 				// This means the LSP segment just expired and we were
@@ -693,6 +728,20 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 			db.setFlag(SSN, &lsp.lspid, c)
 		}
 		db.clearAllFlag(SSN, &lsp.lspid, c)
+
+		// Setup/Reset a refresh time for our own LSP segments.
+		if fromUs {
+			if lsp.refresh != nil {
+				// We don't care if we can't stop it, this pathological case
+				// just results in an extra seqno increment.
+				lsp.refresh.Stop()
+			}
+			// Refresh when the lifetime values is 3/4 expired.
+			refresh := time.Second * time.Duration(nlifetime) * 3 / 4
+			// New refresh timer, old one has fired, is stopped or we don't care.
+			lsp.refresh = time.AfterFunc(refresh, func() { db.refreshC <- lspid })
+			db.debug("%s: setting refresh timer for %s to %s", db, lsp, refresh)
+		}
 	} else if result == SAME {
 		// e2) Same - Stop sending and Acknowledge
 		//     [ also: ISO 10589 17.3.16.4: b.2 ]
@@ -815,6 +864,42 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 
 }
 
+// Increment the sequence number for one of our own LSP segments, fixup the
+// header and inject into DB.
+func (db *DB) incSeqNo(payload []byte, seqno uint32) {
+	db.debug("%s Incrementing Own Seq No 0x%x", db, seqno)
+
+	lspbuf := payload[clns.HdrCLNSSize:]
+
+	seqno += 1 // XXX deal with rollover.
+
+	lifetime := uint16(clns.MaxAge)
+	pkt.PutUInt16(lspbuf[clns.HdrLSPLifetime:], lifetime)
+	pkt.PutUInt32(lspbuf[clns.HdrLSPSeqNo:], seqno)
+	pkt.PutUInt16(lspbuf[clns.HdrLSPCksum:], 0)
+	cksum := clns.Cksum(lspbuf[clns.HdrLSPLSPID:], 13)
+	pkt.PutUInt16(lspbuf[clns.HdrLSPCksum:], cksum)
+
+	tlvs, err := tlv.Data(lspbuf[clns.HdrLSPSize:]).ParseTLV()
+	if err != nil {
+		db.debug("%s Invalid TLV from ourselves", db)
+		panic("Invalid TLV from ourselves")
+	}
+
+	db.receiveLSP(nil, payload, tlvs)
+}
+
+func (db *DB) isOwnSupported(lspid clns.LSPID) bool {
+	isOurs := bytes.Equal(lspid[:clns.SysIDLen], db.sysid[:])
+	if !isOurs {
+		return false
+	}
+
+	pnid := lspid[clns.SysIDLen]
+	segid := lspid[clns.NodeIDLen]
+	return db.ownlsp[pnid] != nil && db.ownlsp[pnid].segments[segid] != nil
+}
+
 func (db *DB) handleExpireC(lspid clns.LSPID) {
 	db.debug("1) <-expireC %s", lspid)
 	// Come in here 2 ways, either with zeroLifetime non-nil but
@@ -826,6 +911,19 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 		db.debug("Warning: <-expireC %s not present", lspid)
 		return
 	}
+
+	// Let's do a sanity check and make sure this isn't our own LSP that we support.
+	if db.isOwnSupported(lspid) {
+		db.debug("<-expireC: %s Expired without refresh! (timer: %v)", lsp, lsp.refresh != nil)
+		if lsp.refresh != nil {
+			lsp.refresh.Stop()
+			lsp.refresh = nil
+		}
+		db.debug("<-expireC: %s Expired without refresh increment", lsp)
+		db.incSeqNo(lsp.payload, lsp.getSeqNo())
+		return
+	}
+
 	db.debug("2) <-expireC %s", lspid)
 	if lsp.life != nil {
 		if lsp.life.Until() != 0 {
@@ -859,6 +957,22 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 		db.debug("7) <-expireC %s", lspid)
 	}
 	db.debug("8) <-expireC %s", lspid)
+}
+
+// handleRefreshC handles timer events to refresh one of our LSP segments
+func (db *DB) handleRefreshC(in clns.LSPID) {
+	dblsp := db.db[in]
+	if !db.isOwnSupported(in) {
+		lifetime := dblsp.checkLifetime()
+		if lifetime != 0 {
+			panic(fmt.Sprintf("%s: Non-zero lifetime unsupported own LSP %s %d", db, dblsp, lifetime))
+		}
+		// We do not refresh purged LSP segments, just drop this timer
+		// event, this can happen if we can't stop the timer when we
+		// initiate a purge.
+		return
+	}
+	db.incSeqNo(dblsp.payload, dblsp.getSeqNo())
 }
 
 // handleChgLSPC handles changes to our Own LSPs
@@ -953,6 +1067,8 @@ func (db *DB) Run() {
 			db.handlePduC(&in)
 		case in := <-db.expireC:
 			db.handleExpireC(in)
+		case in := <-db.refreshC:
+			db.handleRefreshC(in)
 		case in := <-db.dataC:
 			db.handleDataC(in)
 		case in := <-db.chgCC:

@@ -83,6 +83,7 @@ func StartHelloProcess(link *LinkLAN, interval uint, quit <-chan bool) {
 	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, interval)
 	ival := time.Second * time.Duration(interval)
 	ticker := time.NewTicker(ival) // XXX replace with jittered timer.
+
 	go helloProcess(ticker.C, link, quit)
 }
 
