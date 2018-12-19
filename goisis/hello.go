@@ -443,12 +443,9 @@ func (link *LinkLAN) disFindBest() (bool, *Adj) {
 }
 
 func (link *LinkLAN) disSelfElect() {
-	// Always let the update process know.
-	link.updb.ElectDIS(link.circuit, link.lclCircID)
 	if link.disElected {
 		return
 	}
-
 	link.disElected = true
 
 	ival := time.Second * time.Duration(link.helloInt) / 3
@@ -457,12 +454,9 @@ func (link *LinkLAN) disSelfElect() {
 }
 
 func (link *LinkLAN) disSelfResign() {
-	// Always let the update process know.
-	link.updb.ResignDIS(link.circuit, link.lclCircID)
 	if !link.disElected {
 		return
 	}
-
 	link.disElected = false
 
 	ival := time.Second * time.Duration(link.helloInt)
@@ -484,8 +478,12 @@ func (link *LinkLAN) disElect(firstRun bool) {
 		Debug(DbgFDIS, "%s electUS", link)
 		newLANID = link.ourlanID
 	} else if electOther != nil {
-		Debug(DbgFDIS, "%s electOther %s", link, electOther)
-		newLANID = electOther.lanID
+		if !bytes.Equal(electOther.lanID[:clns.SysIDLen], electOther.sysid[:]) {
+			Debug(DbgFDIS, "%s electOther %s Resigns!", link, electOther)
+		} else {
+			Debug(DbgFDIS, "%s electOther %s", link, electOther)
+			newLANID = electOther.lanID
+		}
 	} else {
 		Debug(DbgFDIS, "%s elect None!", link)
 	}
@@ -499,6 +497,9 @@ func (link *LinkLAN) disElect(firstRun bool) {
 
 	// newLANID may be 0s if no-one elected.
 	link.lanID = newLANID
+
+	// Always let the update process know.
+	link.updb.ChangeDIS(link.circuit, link.lanID[clns.SysIDLen])
 
 	if !electUs {
 		link.disSelfResign()
