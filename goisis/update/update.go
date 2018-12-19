@@ -57,10 +57,12 @@ type DB struct {
 	hostname  string
 	circuits  map[string]Circuit
 	dis       map[uint8]*disInfo
+	disCount  uint
+	disTimer  *time.Timer
 	chgCC     chan chgCircuit
 	chgDISC   chan chgDIS
 	chgLSPC   chan chgLSP
-	csnpTickC chan uint8
+	csnpTickC chan bool
 	expireC   chan clns.LSPID
 	refreshC  chan clns.LSPID
 	dataC     chan interface{}
@@ -80,6 +82,7 @@ type chgCircuit struct {
 
 type chgDIS struct {
 	c   Circuit // nil for resign.
+	onc Circuit // never nil.
 	cid uint8   // circuit ID
 }
 
@@ -152,9 +155,8 @@ func (result lspCompareResult) String() string {
 
 // disInfo is used to track state for DIS (CSNP)
 type disInfo struct {
-	c     Circuit
-	i     uint // index in csnp cache
-	timer *time.Timer
+	c Circuit
+	i uint // index in csnp cache
 }
 
 // NewDB returns a new Update Process LSP database
@@ -174,7 +176,7 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 		ownlsp:    make(map[uint8]*ownLSP),
 		expireC:   make(chan clns.LSPID, 10),
 		refreshC:  make(chan clns.LSPID, 10),
-		csnpTickC: make(chan uint8, 10),
+		csnpTickC: make(chan bool, 10),
 		dataC:     make(chan interface{}, 10),
 		pduC:      make(chan inputPDU, 10),
 	}
@@ -289,12 +291,12 @@ func (db *DB) RemoveCircuit(c Circuit) {
 
 // ElectDIS sets or clears if we are DIS for the circuit ID.
 func (db *DB) ElectDIS(c Circuit, cid uint8) {
-	db.chgDISC <- chgDIS{c, cid}
+	db.chgDISC <- chgDIS{c, c, cid}
 }
 
 // ResignDIS inform UP that we have resigned DIS for the circuit ID.
-func (db *DB) ResignDIS(cid uint8) {
-	db.chgDISC <- chgDIS{nil, cid}
+func (db *DB) ResignDIS(c Circuit, cid uint8) {
+	db.chgDISC <- chgDIS{nil, c, cid}
 }
 
 // SomethingChanged indicate to the update process that something changed, if
@@ -535,53 +537,54 @@ func (db *DB) handleDataC(req interface{}) {
 func (db *DB) handleChgDISC(in chgDIS) {
 	Debug(DbgFUpd, "%s: handle DIS change in: %v", db, in)
 
-	di, wasSet := db.dis[in.cid]
-	if wasSet && di.c == in.c {
-		Debug(DbgFUpd, "%s: No DIS change c: %v in: %v", db, di.c, in)
+	elected := in.c != nil
+	name := in.onc.Name()
+	di := db.dis[in.cid]
+
+	if elected && di != nil {
+		Debug(DbgFUpd, "%s: still DIS on %s", db, name)
 		return
 	}
 
 	// Update our non-pnode LSP
 	db.SomethingChanged(nil)
 
-	elected := in.c != nil
-	if !wasSet && !elected {
-		// Indicate elected but not us.
-		db.dis[in.cid] = &disInfo{}
-		Debug(DbgFUpd, "%s: No DIS set and we aren't elected on CID %d", db, in.cid)
+	if !elected && db == nil {
+		// Someone else is still elected.
+		Debug(DbgFUpd, "%s: still not DIS on %s", db, name)
 		return
 	}
+
 	if elected {
 		c := in.c
-		Debug(DbgFUpd, "%s: Elected DIS on %s", db, c.Name())
+		Debug(DbgFUpd, "%s: Elected DIS on %s", db, name)
 
-		// Start sending CSNP
-		// We should probably just do this per circuit.
-
-		// XXX csnp interval hardcoded here.
-		db.dis[in.cid] = &disInfo{
-			c: in.c,
-			timer: time.AfterFunc(time.Second*10, func() {
-				db.csnpTickC <- in.cid
-			}),
-		}
-
+		db.dis[in.cid] = &disInfo{c: in.c}
 		db.ownlsp[in.cid] = newOwnLSP(in.cid, db, c)
+
+		// Start the CSNP timer.
+		db.disCount++
+		if db.disCount == 1 && db.disTimer == nil {
+			// XXX csnp interval hardcoded here.
+			db.disTimer = time.AfterFunc(time.Second*10, func() {
+				db.csnpTickC <- true
+			})
+		}
 	} else {
 		// Stop the CSNP timer.
-		if di.timer != nil {
-			di.timer.Stop()
+		db.disCount--
+		if db.disCount == 0 && db.disTimer != nil {
+			db.disTimer.Stop()
+			db.disTimer = nil
 		}
-		c := di.c
 
-		db.dis[in.cid] = &disInfo{}
+		delete(db.dis, in.cid)
 
-		Debug(DbgFUpd, "%s: Resigned DIS on %s", db, c.Name())
 		lsp := db.ownlsp[in.cid]
-		db.ownlsp[in.cid] = nil
+		delete(db.ownlsp, in.cid)
 		lsp.purge()
 
-		// Stop sending CSNP
+		Debug(DbgFUpd, "%s: Resigned DIS on %s", db, name)
 	}
 }
 
@@ -610,9 +613,9 @@ func (db *DB) handleChgCircuit(in chgCircuit) {
 
 }
 
-// Send a CSNP packet on the circuit.
-func (db *DB) handleCsnpTickC(in uint8) {
-	if di := db.dis[in]; di != nil && di.c != nil {
+// Send a CSNP packet on all DIS circuits.
+func (db *DB) handleCsnpTickC() {
+	for _, di := range db.dis {
 		di.c.Send(db.cachePdu(&di.i), db.li)
 	}
 }
@@ -627,8 +630,8 @@ func (db *DB) run() {
 			db.handleChgDISC(in)
 		case in := <-db.chgLSPC:
 			db.handleChgLSPC(in)
-		case in := <-db.csnpTickC:
-			db.handleCsnpTickC(in)
+		case <-db.csnpTickC:
+			db.handleCsnpTickC()
 		case in := <-db.pduC:
 			db.handlePduC(&in)
 		case in := <-db.expireC:

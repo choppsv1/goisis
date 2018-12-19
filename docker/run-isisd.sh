@@ -20,13 +20,9 @@ EOF
 
 cat > /etc/quagga/isisd.conf <<EOIF
 hostname r${routerid}
-interface eth0
-    ip router isis ring
-interface eth1
-    ip router isis ring
-interface eth2
-    ip router isis ring
 interface lo
+line vty
+log stdout
 router isis ring
     net 00.0000.0000.00${routerid}.00
     metric-style wide
@@ -34,8 +30,15 @@ router isis ring
     lsp-gen-interval 10
     lsp-refresh-interval 60
     max-lsp-lifetime 360
-line vty
-log stdout
+interface eth0
+    ip router isis ring
+    isis circuit-type level-1
+interface eth1
+    ip router isis ring
+    isis circuit-type level-1
+interface eth2
+    ip router isis ring
+    isis circuit-type level-1
 EOIF
 
 # systemctl start zerba

@@ -458,7 +458,7 @@ func (link *LinkLAN) disSelfElect() {
 
 func (link *LinkLAN) disSelfResign() {
 	// Always let the update process know.
-	link.updb.ResignDIS(link.lclCircID)
+	link.updb.ResignDIS(link.circuit, link.lclCircID)
 	if !link.disElected {
 		return
 	}

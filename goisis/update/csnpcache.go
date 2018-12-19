@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/choppsv1/goisis/clns"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/tlv"
 )
@@ -103,13 +104,15 @@ func (db *DB) nextCsnpPdu() []byte {
 	// Finally trim the payload and set the PDULen
 	pdulen := tlv.GetOffset(pdu, endp)
 	pkt.PutUInt16(csnp[clns.HdrCSNPPDULen:], uint16(pdulen))
-	return pdu[pdulen:]
+	return pdu[:pdulen]
 }
 
 // cachePdu gets the cache entry (or creates it), it also returns what actual
 // index that was fetched.
 func (db *DB) cachePdu(i *uint) []byte {
 	count := uint(len(db.cache.pdus))
+	Debug(DbgFUpd, "%s: CSNP cachePdu *i: %d count: %d", db, *i, count)
+
 	if *i < count {
 		return db.cache.pdus[*i]
 	}
@@ -150,6 +153,7 @@ func (db *DB) cacheLocate(lsphdr []byte) int {
 func (db *DB) cacheAdd(lsphdr []byte) {
 	// We want to just invalidate a given PDU and always reserve some slop
 	// for insert/delete, probably should indicate type of change in API.
+	Debug(DbgFUpd, "%s: CSNP cache add %s", db, clns.LSPIDString(lsphdr[clns.HdrLSPLSPID:]))
 
 	// XXX for now very simple just flush the entries PDU and all beyond
 	i := db.cacheLocate(lsphdr)
@@ -163,6 +167,7 @@ func (db *DB) cacheAdd(lsphdr []byte) {
 func (db *DB) cacheDelete(lsphdr []byte) {
 	// We want to just invalidate a given PDU and always reserve some slop
 	// for insert/delete, probably should indicate type of change in API.
+	Debug(DbgFUpd, "%s: CSNP cache delete %s", db, clns.LSPIDString(lsphdr[clns.HdrLSPLSPID:]))
 
 	// XXX for now very simple just flush the entries PDU and all beyond
 	i := db.cacheLocate(lsphdr)
@@ -175,6 +180,8 @@ func (db *DB) cacheDelete(lsphdr []byte) {
 
 func (db *DB) cacheUpdate(lsphdr []byte) {
 	// Locate the PDU and update the entry.
+
+	Debug(DbgFUpd, "%s: CSNP cache update %s", db, clns.LSPIDString(lsphdr[clns.HdrLSPLSPID:]))
 
 	// XXX for now very simple just flush the entries PDU and all beyond
 	i := db.cacheLocate(lsphdr)
