@@ -14,8 +14,7 @@ import (
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
-	// art "github.com/plar/go-adaptive-radix-tree"
-	"sort"
+	"github.com/plar/go-adaptive-radix-tree"
 	"time"
 )
 
@@ -56,6 +55,15 @@ func (lsp *lspSegment) cksum() uint16 {
 // 	return clns.LSPFlags(lsp.hdr[clns.HdrLSPFlags])
 // }
 
+// get the lsp segment with the given LSPID or nil if not present.
+func (db *DB) get(lspid []byte) *lspSegment {
+	v, ok := db.db.Search(lspid)
+	if !ok {
+		return nil
+	}
+	return v.(*lspSegment)
+}
+
 // newLSPSegment creates a new lspSegment struct
 func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSegment {
 	hdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
@@ -76,9 +84,8 @@ func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSe
 	//      lsp.refreshTimer = time.NewTimer(lsp.lifetime.Remainingg())
 	// }
 
-	db.db[lsp.lspid] = lsp
-
-	cacheAdd(lsp.hdr)
+	db.db.Insert(lsp.lspid[:], lsp)
+	db.cacheAdd(lsp.hdr)
 
 	Debug(DbgFUpd, "%s: New LSP: %s", db, lsp)
 	return lsp
@@ -96,9 +103,8 @@ func (db *DB) newZeroLSPSegment(lifetime uint16, lspid *clns.LSPID, cksum uint16
 	lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
 	lsp.isOurs = bytes.Equal(lsp.lspid[:clns.SysIDLen], db.sysid[:])
 
-	db.db[lsp.lspid] = lsp
-
-	cacheAdd(lsp.hdr)
+	db.db.Insert(lsp.lspid[:], lsp)
+	db.cacheAdd(lsp.hdr)
 
 	Debug(DbgFUpd, "%s: New Zero SeqNo LSP: %s", db, lsp)
 	return lsp
@@ -116,7 +122,7 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 	lsp.hdr = Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	lsp.tlvs = tlvs
 
-	cacheUpdate(lsp.hdr)
+	db.cacheUpdate(lsp.hdr)
 
 	lifetime := pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:])
 	if lifetime == 0 {
@@ -214,7 +220,7 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 
 	// a)
 	// db.setsrm <- lsp.lspid
-	db.setAllFlag(SRM, &lsp.lspid, nil)
+	db.setAllFlag(SRM, lsp.lspid, nil)
 
 	// b) Retain only LSP header. XXX we need more space for auth and purge tlv
 	pdulen := uint16(clns.HdrCLNSSize + clns.HdrLSPSize)
@@ -225,17 +231,17 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
 
 	// Update the CSNP cache
-	cacheUpdate(lsp.hdr)
+	db.cacheUpdate(lsp.hdr)
 
 }
 
 // deleteLSP removes the LSP from the DB.
 func (db *DB) deleteLSP(lsp *lspSegment) {
 	// Update the CSNP cache
-	cacheDelete(lsp.hdr)
+	db.cacheDelete(lsp.hdr)
 
 	Debug(DbgFUpd, "Deleting LSP %s", lsp)
-	delete(db.db, lsp.lspid)
+	db.db.Delete(lsp.lspid[:])
 }
 
 // Increment the sequence number for one of our own LSP segments, fixup the
@@ -301,7 +307,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 	var lspid clns.LSPID
 	copy(lspid[:], payload[clns.HdrCLNSSize+clns.HdrLSPLSPID:])
 
-	lsp := db.db[lspid]
+	lsp := db.get(lspid[:])
 
 	newhdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	nlifetime := pkt.GetUInt16(newhdr[clns.HdrLSPLifetime:])
@@ -424,12 +430,12 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 			lsp = db.newLSPSegment(payload, tlvs)
 		}
 
-		db.setAllFlag(SRM, &lsp.lspid, c)
-		db.clearFlag(SRM, &lsp.lspid, c)
+		db.setAllFlag(SRM, lsp.lspid, c)
+		db.clearFlag(SRM, lsp.lspid, c)
 		if c != nil && c.IsP2P() {
-			db.setFlag(SSN, &lsp.lspid, c)
+			db.setFlag(SSN, lsp.lspid, c)
 		}
-		db.clearAllFlag(SSN, &lsp.lspid, c)
+		db.clearAllFlag(SSN, lsp.lspid, c)
 
 		// Setup/Reset a refresh time for our own LSP segments.
 		if fromUs {
@@ -447,16 +453,16 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 	} else if result == SAME {
 		// e2) Same - Stop sending and Acknowledge
 		//     [ also: ISO 10589 17.3.16.4: b.2 ]
-		db.clearAllFlag(SRM, &lsp.lspid, nil)
+		db.clearAllFlag(SRM, lsp.lspid, nil)
 		if c != nil && c.IsP2P() {
-			db.setFlag(SSN, &lsp.lspid, c)
+			db.setFlag(SSN, lsp.lspid, c)
 		}
 	} else {
 		// e3) Older - Send and don't acknowledge
 		//     [ also: ISO 10589 17.3.16.4: b.3 ]
-		db.setFlag(SRM, &lsp.lspid, c)
-		db.clearFlag(SSN, &lsp.lspid, c)
-		db.clearAllFlag(SRM, &lsp.lspid, nil)
+		db.setFlag(SRM, lsp.lspid, c)
+		db.clearFlag(SSN, lsp.lspid, c)
+		db.clearAllFlag(SRM, lsp.lspid, nil)
 	}
 }
 
@@ -468,9 +474,9 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 	// a.1-5 already done in receive 6 Check SNPA from an adj (use function)
 	// a.[78] check password/auth
 
-	var mentioned map[clns.LSPID]struct{}
+	var mentioned art.Tree
 	if complete {
-		mentioned = make(map[clns.LSPID]struct{})
+		mentioned = art.New()
 	}
 
 	// ISO10589: 8.3.15.2.b
@@ -483,8 +489,9 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 	for _, e := range entries {
 		var elspid clns.LSPID
 		copy(elspid[:], e[tlv.SNPEntLSPID:])
-		lsp := db.db[elspid]
-		mentioned[elspid] = struct{}{}
+
+		lsp := db.get(elspid[:])
+		mentioned.Insert(elspid[:], true)
 
 		// 7.3.15.2: b1
 		result := compareLSP(lsp, e)
@@ -492,12 +499,12 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 		case SAME:
 			if c.IsP2P() {
 				// 7.3.15.2: b2 ack received, stop sending on p2p
-				db.clearFlag(SRM, &elspid, c)
+				db.clearFlag(SRM, elspid, c)
 			}
 		case OLDER:
 			// 7.3.15.2: b3 flood newer from our DB
-			db.clearFlag(SSN, &elspid, c)
-			db.setFlag(SRM, &elspid, c)
+			db.clearFlag(SSN, elspid, c)
+			db.setFlag(SRM, elspid, c)
 		case NEWER:
 			lifetime := pkt.GetUInt16(e[tlv.SNPEntLifetime:])
 			seqno := pkt.GetUInt32(e[tlv.SNPEntSeqNo:])
@@ -507,9 +514,9 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 					db, lifetime, seqno, cksum, lsp)
 
 				// 7.3.15.2: b4 Request newer.
-				db.setFlag(SSN, &elspid, c)
+				db.setFlag(SSN, elspid, c)
 				if c.IsP2P() {
-					db.clearFlag(SRM, &elspid, c)
+					db.clearFlag(SRM, elspid, c)
 				}
 			} else {
 				// 7.3.15.2: b5 Add zero seqno segment for missing
@@ -517,7 +524,7 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 					db, lifetime, seqno, cksum, elspid)
 				if lifetime != 0 && seqno != 0 && cksum != 0 {
 					_ = db.newZeroLSPSegment(lifetime, &elspid, cksum)
-					db.setFlag(SSN, &elspid, c)
+					db.setFlag(SSN, elspid, c)
 				}
 
 			}
@@ -530,28 +537,24 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 	Debug(DbgFUpd, "%s: CSNP: Look for we have, they don'ts", db)
 
 	// 7.3.15.2.c Set SRM for all LSP we have that were not mentioned.
-
-	// Get sorted list of LSPIDs we have
-	keys := make(clns.LSPIDArray, 0, len(db.db))
-	for k := range db.db {
-		keys = append(keys, k)
-	}
-	sort.Sort(keys)
-
 	hdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrCSNPSize)
 	startid := Slicer(hdr, clns.HdrCSNPStartLSPID, clns.LSPIDLen)
 	endid := Slicer(hdr, clns.HdrCSNPStartLSPID, clns.LSPIDLen)
 
-	for _, lspid := range keys {
+	for it := db.db.Iterator(); it.HasNext(); {
+		var lspid clns.LSPID
+		node, _ := it.Next()
+		copy(lspid[:], node.Key())
+
 		if bytes.Compare(lspid[:], startid) < 0 {
 			continue
 		}
 		if bytes.Compare(lspid[:], endid) > 0 {
 			break
 		}
-		_, present := mentioned[lspid]
-		if !present {
-			lsp := db.db[lspid]
+		_, found := mentioned.Search(lspid[:])
+		if !found {
+			lsp := db.get(lspid[:])
 
 			Debug(DbgFUpd, "%s: CSNP: Missing %s", db, lsp)
 			if lsp.seqNo() == 0 {
@@ -562,7 +565,7 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVM
 				Debug(DbgFUpd, "%s: CSNP: Skipping zero lifetime: LSPID: %s", db, lspid)
 				continue
 			}
-			db.setFlag(SRM, &lspid, c)
+			db.setFlag(SRM, lspid, c)
 		}
 	}
 

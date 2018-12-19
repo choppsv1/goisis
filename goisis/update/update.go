@@ -15,6 +15,7 @@ import (
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
+	"github.com/plar/go-adaptive-radix-tree"
 	"net"
 	"os"
 	"time"
@@ -63,7 +64,7 @@ type DB struct {
 	refreshC  chan clns.LSPID
 	dataC     chan interface{}
 	pduC      chan inputPDU
-	db        map[clns.LSPID]*lspSegment
+	db        art.Tree
 	ownlsp    map[uint8]*ownLSP
 }
 
@@ -168,7 +169,7 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 		chgCC:     make(chan chgCircuit, 10),
 		chgDISC:   make(chan chgDIS, 10),
 		dis:       make(map[uint8]disInfo),
-		db:        make(map[clns.LSPID]*lspSegment),
+		db:        art.New(),
 		ownlsp:    make(map[uint8]*ownLSP),
 		expireC:   make(chan clns.LSPID, 10),
 		refreshC:  make(chan clns.LSPID, 10),
@@ -340,36 +341,36 @@ func (lsp *lspSegment) String() string {
 }
 
 // setAllFlag sets flag for LSPID on all circuits but 'not' for updb level.
-func (db *DB) setAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
+func (db *DB) setAllFlag(flag SxxFlag, lspid clns.LSPID, not Circuit) {
 	for _, c := range db.circuits {
 		if c != not {
-			c.ChgFlag(flag, lspid, true, db.li)
+			c.ChgFlag(flag, &lspid, true, db.li)
 		}
 	}
 }
 
 // clearAllFlag clears flag for LSPID on all circuits but 'not' for updb level.
-func (db *DB) clearAllFlag(flag SxxFlag, lspid *clns.LSPID, not Circuit) {
+func (db *DB) clearAllFlag(flag SxxFlag, lspid clns.LSPID, not Circuit) {
 	for _, c := range db.circuits {
 		if c != not {
-			c.ChgFlag(flag, lspid, false, db.li)
+			c.ChgFlag(flag, &lspid, false, db.li)
 		}
 	}
 }
 
 // setFlag sets flag for LSPID on circuit for the updb level.
-func (db *DB) setFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
+func (db *DB) setFlag(flag SxxFlag, lspid clns.LSPID, c Circuit) {
 	// May be called with nil if the LSP is internal originated
 	if c != nil {
-		c.ChgFlag(flag, lspid, true, db.li)
+		c.ChgFlag(flag, &lspid, true, db.li)
 	}
 }
 
 // clearFlag clears flag for LSPID on circuit for the updb level.
-func (db *DB) clearFlag(flag SxxFlag, lspid *clns.LSPID, c Circuit) {
+func (db *DB) clearFlag(flag SxxFlag, lspid clns.LSPID, c Circuit) {
 	// May be called with nil if the LSP is internal originated
 	if c != nil {
-		c.ChgFlag(flag, lspid, false, db.li)
+		c.ChgFlag(flag, &lspid, false, db.li)
 	}
 }
 
@@ -399,8 +400,8 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 	// Come in here 2 ways, either with zeroLifetime non-nil but
 	// expired in which case we should be good to remove, or nil
 	// b/c the hold timer fired for this LSP.
-	lsp, ok := db.db[lspid]
-	if !ok {
+	lsp := db.get(lspid[:])
+	if lsp == nil {
 		// it's gone we're done.
 		Debug(DbgFUpd, "Warning: <-expireC %s not present", lspid)
 		return
@@ -431,7 +432,7 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 	Debug(DbgFUpd, "3) <-expireC %s", lspid)
 	if pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:]) == 0 {
 		Debug(DbgFUpd, "Deleting Zero-SeqNo LSP %s", lspid)
-		delete(db.db, lsp.lspid)
+		db.deleteLSP(lsp)
 	} else if lsp.zeroLife == nil {
 		Debug(DbgFUpd, "4) <-expireC %s", lspid)
 		db.initiatePurgeLSP(lsp, true)
@@ -446,7 +447,7 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 			Debug(DbgFUpd, "<-expireC: zeroLife %s ressurected", lsp)
 		} else {
 			lsp.zeroLife = nil
-			deleteLSP(lsp)
+			db.deleteLSP(lsp)
 		}
 		Debug(DbgFUpd, "7) <-expireC %s", lspid)
 	}
@@ -455,7 +456,7 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 
 // handleRefreshC handles timer events to refresh one of our LSP segments
 func (db *DB) handleRefreshC(in clns.LSPID) {
-	dblsp := db.db[in]
+	dblsp := db.get(in[:])
 	if !db.isOwnSupported(in) {
 		lifetime := dblsp.checkLifetime()
 		if lifetime != 0 {
@@ -511,8 +512,8 @@ func (db *DB) handlePduC(in *inputPDU) {
 func (db *DB) handleDataC(req interface{}) {
 	switch in := req.(type) {
 	case inputGetSNP:
-		lsp, ok := db.db[*in.lspid]
-		if !ok {
+		lsp := db.get(in.lspid[:])
+		if lsp == nil {
 			in.result <- false
 			break
 		}
@@ -520,8 +521,8 @@ func (db *DB) handleDataC(req interface{}) {
 		copy(in.ent, lsp.hdr[clns.HdrLSPLifetime:clns.HdrLSPFlags])
 		in.result <- true
 	case inputGetLSP:
-		lsp, ok := db.db[*in.lspid]
-		if !ok {
+		lsp := db.get(in.lspid[:])
+		if lsp == nil {
 			in.result <- 0
 			break
 		}

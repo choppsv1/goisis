@@ -61,8 +61,7 @@ func (lsp *ownLSP) finishSegment(payload []byte, i uint8) error {
 
 	lspid := clns.MakeLSPID(lsp.db.sysid, lsp.Pnid, i)
 
-	dblsp, found := tree.Search(lspid)
-	// dblsp := lsp.db.db[lspid]
+	dblsp := lsp.db.get(lspid[:])
 
 	seqno := uint32(0)
 	if dblsp != nil {
@@ -83,11 +82,10 @@ func (db *DB) purgeOwn(pnid, segid uint8) {
 	Debug(DbgFUpd, "%s: Purge own segment: %x-%x", db, pnid, segid)
 
 	lspid := clns.MakeLSPID(db.sysid, pnid, segid)
-	lsp := db.db[lspid]
+	lsp := db.get(lspid[:])
 	if lsp == nil {
 		return
 	}
-
 	db.initiatePurgeLSP(lsp, false)
 }
 
