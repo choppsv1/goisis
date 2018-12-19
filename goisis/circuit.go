@@ -39,15 +39,16 @@ var llcTemplate = []uint8{
 // Circuit is an IS-IS/CLNS physical interface.
 //
 type Circuit interface {
-	IsP2P() bool
+	Addrs(v4, linklocal bool) []net.IPNet
 	ChgFlag(update.SxxFlag, *clns.LSPID, bool, clns.LIndex)
+	CID(clns.LIndex) uint8
 	ClosePDU(ether.Frame, []byte) ether.Frame
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
+	IsP2P() bool
 	Name() string
-	Addrs(v4, linklocal bool) []net.IPNet
-	CID(clns.LIndex) uint8
-	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
+	MTU() uint
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
+	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	RecvHello(pdu *RecvPDU)
 }
 
@@ -373,6 +374,10 @@ func (c *CircuitLAN) CID(li clns.LIndex) uint8 {
 
 func (c *CircuitLAN) IsP2P() bool {
 	return false
+}
+
+func (c *CircuitLAN) MTU() uint {
+	return uint(c.intf.MTU)
 }
 
 func resolveIfname(in string) (string, error) {

@@ -32,11 +32,12 @@ const LSPGenDelay = 100 * time.Millisecond
 
 // Circuit is the interface that update requires for circuits.
 type Circuit interface {
-	IsP2P() bool
-	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
 	Addrs(v4, linklocal bool) []net.IPNet
+	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
 	CID(clns.LIndex) uint8
+	IsP2P() bool
 	Name() string
+	MTU() uint
 }
 
 // =====
@@ -48,6 +49,7 @@ type DB struct {
 	sysid     clns.SystemID  // change to public as immutable
 	istype    clns.LevelFlag // change to public as immutable
 	li        clns.LIndex    // change to public as immutable
+	cache     csnpCache
 	areas     [][]byte
 	nlpid     []byte
 	hostname  string
@@ -148,9 +150,9 @@ func (result lspCompareResult) String() string {
 
 // disInfo is used to track state for DIS (CSNP)
 type disInfo struct {
-	c       Circuit
-	startID clns.LSPID
-	timer   *time.Timer
+	c     Circuit
+	i     uint // index in csnp cache
+	timer *time.Timer
 }
 
 // NewDB returns a new Update Process LSP database
@@ -425,6 +427,7 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 		// Done with timer.
 		lsp.life = nil
 	}
+
 	Debug(DbgFUpd, "3) <-expireC %s", lspid)
 	if pkt.GetUInt32(lsp.hdr[clns.HdrLSPSeqNo:]) == 0 {
 		Debug(DbgFUpd, "Deleting Zero-SeqNo LSP %s", lspid)
@@ -443,8 +446,7 @@ func (db *DB) handleExpireC(lspid clns.LSPID) {
 			Debug(DbgFUpd, "<-expireC: zeroLife %s ressurected", lsp)
 		} else {
 			lsp.zeroLife = nil
-			Debug(DbgFUpd, "Deleting LSP %s", lsp)
-			delete(db.db, lsp.lspid)
+			deleteLSP(lsp)
 		}
 		Debug(DbgFUpd, "7) <-expireC %s", lspid)
 	}
@@ -514,7 +516,7 @@ func (db *DB) handleDataC(req interface{}) {
 			in.result <- false
 			break
 		}
-		lsp.getUpdLifetime(true)
+		lsp.updateLifetime(true)
 		copy(in.ent, lsp.hdr[clns.HdrLSPLifetime:clns.HdrLSPFlags])
 		in.result <- true
 	case inputGetLSP:
@@ -523,7 +525,7 @@ func (db *DB) handleDataC(req interface{}) {
 			in.result <- 0
 			break
 		}
-		lsp.getUpdLifetime(true)
+		lsp.updateLifetime(true)
 		in.result <- copy(in.payload, lsp.payload)
 	default:
 		panic(fmt.Sprintf("%s: unexpected GetDataC value %v", db, in))
@@ -581,13 +583,38 @@ func (db *DB) handleChgDISC(in chgDIS) {
 	}
 }
 
+// handleChgCircuit adds or removes a circuit from update process.
+func (db *DB) handleChgCircuit(in chgCircuit) {
+	newMtu := uint(65536)
+
+	if in.c != nil {
+		db.circuits[in.name] = in.c
+	} else {
+		delete(db.circuits, in.name)
+	}
+	for _, c := range db.circuits {
+		mtu := c.MTU()
+		if mtu < newMtu {
+			newMtu = mtu
+		}
+	}
+	// If csnp MTU changed, flush the cache and recreate.
+	if db.cache.mtu != newMtu {
+		Debug(DbgFUpd, "MTU change from %d to %d flushing CSNP cache",
+			db.cache.mtu, newMtu)
+		db.cache.mtu = newMtu
+		db.cache.pdus = nil
+	}
+
+}
+
 // Send a CSNP packet on the circuit.
 func (db *DB) handleCsnpTickC(in uint8) {
 	di, ok := db.dis[in]
 	if !ok || di.c == nil {
 		return
 	}
-	// XXX fill a CSNP PDU here.
+	// Send a CSNP from the cache.
 }
 
 // Run runs the update process
@@ -611,11 +638,7 @@ func (db *DB) run() {
 		case in := <-db.dataC:
 			db.handleDataC(in)
 		case in := <-db.chgCC:
-			if in.c != nil {
-				db.circuits[in.name] = in.c
-			} else {
-				delete(db.circuits, in.name)
-			}
+			db.handleChgCircuit(in)
 		}
 	}
 }

@@ -24,6 +24,10 @@ for a Circuit. In particular adjacencies are associated with Links. In the case
 of a LAN Circuit there will be one Link per level. In the case of a
 point-to-point Circuit there will be only a single Link.
 
+** External Dependencies
+
+- Adaptive Radix Trie ("github.com/plar/go-adaptive-radix-tree")
+
 ** TODO Missing Items
 *** Hello Process
 - Speed up timers when DIS.

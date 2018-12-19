@@ -14,6 +14,7 @@ import (
 	"github.com/choppsv1/goisis/pkt"
 	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
+	// art "github.com/plar/go-adaptive-radix-tree"
 	"sort"
 	"time"
 )
@@ -29,7 +30,7 @@ func (lsp *lspSegment) checkLifetime() uint16 {
 	return lsp.life.Until()
 }
 
-func (lsp *lspSegment) getUpdLifetime(shave bool) uint16 {
+func (lsp *lspSegment) updateLifetime(shave bool) uint16 {
 	if lsp.life == nil {
 		if pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:]) != 0 {
 			panic("Invalid non-zero life with no holdtimer")
@@ -45,10 +46,6 @@ func (lsp *lspSegment) getUpdLifetime(shave bool) uint16 {
 	// }
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], lifetime)
 	return lifetime
-}
-
-func (lsp *lspSegment) setLifetime(sec uint16) {
-	pkt.PutUInt16(lsp.hdr[clns.HdrLSPLifetime:], sec)
 }
 
 func (lsp *lspSegment) cksum() uint16 {
@@ -81,6 +78,8 @@ func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSe
 
 	db.db[lsp.lspid] = lsp
 
+	cacheAdd(lsp.hdr)
+
 	Debug(DbgFUpd, "%s: New LSP: %s", db, lsp)
 	return lsp
 }
@@ -99,6 +98,8 @@ func (db *DB) newZeroLSPSegment(lifetime uint16, lspid *clns.LSPID, cksum uint16
 
 	db.db[lsp.lspid] = lsp
 
+	cacheAdd(lsp.hdr)
+
 	Debug(DbgFUpd, "%s: New Zero SeqNo LSP: %s", db, lsp)
 	return lsp
 }
@@ -109,15 +110,13 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 
 	// On entering the hold timer has already been stopped by receiveLSP
 
-	// if lsp.isOurs {
-	// 	pnid := lsp.lspid[7]
-	// }
-
 	// We are replacing the previous PDU payload slice thus we are
 	// relinquishing our reference on that previous PDU frame
 	lsp.payload = payload
 	lsp.hdr = Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	lsp.tlvs = tlvs
+
+	cacheUpdate(lsp.hdr)
 
 	lifetime := pkt.GetUInt16(lsp.hdr[clns.HdrLSPLifetime:])
 	if lifetime == 0 {
@@ -224,6 +223,19 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	Debug(DbgFUpd, "Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
+
+	// Update the CSNP cache
+	cacheUpdate(lsp.hdr)
+
+}
+
+// deleteLSP removes the LSP from the DB.
+func (db *DB) deleteLSP(lsp *lspSegment) {
+	// Update the CSNP cache
+	cacheDelete(lsp.hdr)
+
+	Debug(DbgFUpd, "Deleting LSP %s", lsp)
+	delete(db.db, lsp.lspid)
 }
 
 // Increment the sequence number for one of our own LSP segments, fixup the
@@ -271,7 +283,7 @@ func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
 	}
 
 	nlifetime := pkt.GetUInt16(e[tlv.SNPEntLifetime:])
-	olifetime := lsp.getUpdLifetime(false)
+	olifetime := lsp.updateLifetime(false)
 	if nlifetime == 0 && olifetime != 0 {
 		return NEWER
 	} else if olifetime == 0 && nlifetime != 0 {

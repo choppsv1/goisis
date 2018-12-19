@@ -60,7 +60,9 @@ func (lsp *ownLSP) finishSegment(payload []byte, i uint8) error {
 	hdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 
 	lspid := clns.MakeLSPID(lsp.db.sysid, lsp.Pnid, i)
-	dblsp := lsp.db.db[lspid]
+
+	dblsp, found := tree.Search(lspid)
+	// dblsp := lsp.db.db[lspid]
 
 	seqno := uint32(0)
 	if dblsp != nil {
