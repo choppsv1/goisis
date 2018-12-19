@@ -29,11 +29,6 @@ point-to-point Circuit there will be only a single Link.
 - Adaptive Radix Trie ("github.com/plar/go-adaptive-radix-tree")
 
 ** TODO Missing Items
-*** Hello Process
-- Speed up timers when DIS.
-- Implement P2P interfaces
-*** Update Process
-- CSNP when DIS
 - Own LSP Reachability
-*** Decision Process
-- Implement
+- Implement P2P interfaces
+- Implement Decision Process (SPF)
