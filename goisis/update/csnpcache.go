@@ -4,7 +4,7 @@
 //
 
 // Package update implements the update process of the IS-IS routing protocol.
-// This file contains an implementation of a CSNP cache. PATENT: xxx
+// This file contains an implementation of a CSNP cache. US PATENT: US7742437
 package update
 
 import (

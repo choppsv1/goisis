@@ -618,6 +618,9 @@ func (db *DB) handleCsnpTickC() {
 	for _, di := range db.dis {
 		di.c.Send(db.cachePdu(&di.i), db.li)
 	}
+	db.disTimer = time.AfterFunc(time.Second*10, func() {
+		db.csnpTickC <- true
+	})
 }
 
 // Run runs the update process
