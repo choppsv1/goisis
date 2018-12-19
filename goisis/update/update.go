@@ -39,6 +39,7 @@ type Circuit interface {
 	IsP2P() bool
 	Name() string
 	MTU() uint
+	Send([]byte, clns.LIndex)
 }
 
 // =====
@@ -55,7 +56,7 @@ type DB struct {
 	nlpid     []byte
 	hostname  string
 	circuits  map[string]Circuit
-	dis       map[uint8]disInfo
+	dis       map[uint8]*disInfo
 	chgCC     chan chgCircuit
 	chgDISC   chan chgDIS
 	chgLSPC   chan chgLSP
@@ -168,7 +169,7 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 		chgLSPC:   make(chan chgLSP, 10),
 		chgCC:     make(chan chgCircuit, 10),
 		chgDISC:   make(chan chgDIS, 10),
-		dis:       make(map[uint8]disInfo),
+		dis:       make(map[uint8]*disInfo),
 		db:        art.New(),
 		ownlsp:    make(map[uint8]*ownLSP),
 		expireC:   make(chan clns.LSPID, 10),
@@ -377,9 +378,7 @@ func (db *DB) clearFlag(flag SxxFlag, lspid clns.LSPID, c Circuit) {
 func (db *DB) addrs(v4 bool) []net.IPNet {
 	addrs := make([]net.IPNet, 0, len(db.circuits))
 	for _, c := range db.circuits {
-		for _, addr := range c.Addrs(v4, false) {
-			addrs = append(addrs, addr)
-		}
+		addrs = append(addrs, c.Addrs(v4, false)...)
 	}
 	return addrs
 }
@@ -548,7 +547,7 @@ func (db *DB) handleChgDISC(in chgDIS) {
 	elected := in.c != nil
 	if !wasSet && !elected {
 		// Indicate elected but not us.
-		db.dis[in.cid] = disInfo{}
+		db.dis[in.cid] = &disInfo{}
 		Debug(DbgFUpd, "%s: No DIS set and we aren't elected on CID %d", db, in.cid)
 		return
 	}
@@ -557,8 +556,10 @@ func (db *DB) handleChgDISC(in chgDIS) {
 		Debug(DbgFUpd, "%s: Elected DIS on %s", db, c.Name())
 
 		// Start sending CSNP
+		// We should probably just do this per circuit.
+
 		// XXX csnp interval hardcoded here.
-		db.dis[in.cid] = disInfo{
+		db.dis[in.cid] = &disInfo{
 			c: in.c,
 			timer: time.AfterFunc(time.Second*10, func() {
 				db.csnpTickC <- in.cid
@@ -573,7 +574,7 @@ func (db *DB) handleChgDISC(in chgDIS) {
 		}
 		c := di.c
 
-		db.dis[in.cid] = disInfo{}
+		db.dis[in.cid] = &disInfo{}
 
 		Debug(DbgFUpd, "%s: Resigned DIS on %s", db, c.Name())
 		lsp := db.ownlsp[in.cid]
@@ -611,11 +612,9 @@ func (db *DB) handleChgCircuit(in chgCircuit) {
 
 // Send a CSNP packet on the circuit.
 func (db *DB) handleCsnpTickC(in uint8) {
-	di, ok := db.dis[in]
-	if !ok || di.c == nil {
-		return
+	if di := db.dis[in]; di != nil && di.c != nil {
+		di.c.Send(db.cachePdu(&di.i), db.li)
 	}
-	// Send a CSNP from the cache.
 }
 
 // Run runs the update process

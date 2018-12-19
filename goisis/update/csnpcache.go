@@ -22,24 +22,22 @@ type csnpCache struct {
 	mtu  uint
 }
 
-func startID(pdu []byte) (lspid clns.LSPID) {
-	copy(lspid[:], Slicer(pdu, clns.HdrCLNSSize+clns.HdrCSNPStartLSPID, clns.LSPIDLen))
-	return
+func startSlice(pdu []byte) []byte {
+	off := clns.HdrCLNSSize + clns.HdrCSNPStartLSPID
+	return pdu[off : off+clns.LSPIDLen]
 }
 
-func endID(pdu []byte) (lspid clns.LSPID) {
-	copy(lspid[:], Slicer(pdu, clns.HdrCLNSSize+clns.HdrCSNPEndLSPID, clns.LSPIDLen))
-	return
+func endSlice(pdu []byte) []byte {
+	off := clns.HdrCLNSSize + clns.HdrCSNPEndLSPID
+	return pdu[off : off+clns.LSPIDLen]
 }
 
 func isEndCsnp(pdu []byte) bool {
-	return bytes.Equal(endLSPID[:],
-		Slicer(pdu, clns.HdrCLNSSize+clns.HdrCSNPEndLSPID, clns.LSPIDLen))
-
+	return bytes.Equal(endLSPID[:], endSlice(pdu))
 }
 
-func nextLSPID(lspid clns.LSPID) clns.LSPID {
-	binary.BigEndian.PutUint64(lspid[:], binary.BigEndian.Uint64(lspid[:])+1)
+func nextLSPID(in []byte) (lspid clns.LSPID) {
+	binary.BigEndian.PutUint64(lspid[:], binary.BigEndian.Uint64(in[:])+1)
 	return lspid
 }
 
@@ -52,9 +50,9 @@ func (db *DB) nextCsnpPdu() []byte {
 
 	var startid clns.LSPID
 	if count > 0 {
-		startid = nextLSPID(endID(db.cache.pdus[count-1]))
+		startid = nextLSPID(endSlice(db.cache.pdus[count-1]))
 	}
-	copy(csnp[clns.HdrCSNPStartLSPID:], startid[:])
+	copy(startSlice(pdu), startid[:])
 
 	// Find first LSP equal to or great than start
 	// XXX we have a tree, we need to use it here!
@@ -97,9 +95,9 @@ func (db *DB) nextCsnpPdu() []byte {
 
 	// If more LSP then store LSPID as end or endID if no more.
 	if it.HasNext() {
-		copy(csnp[clns.HdrCSNPEndLSPID:], lsp.lspid[:])
+		copy(endSlice(pdu), lsp.lspid[:])
 	} else {
-		copy(csnp[clns.HdrCSNPEndLSPID:], endLSPID[:])
+		copy(endSlice(pdu), endLSPID[:])
 	}
 
 	// Finally trim the payload and set the PDULen
@@ -110,20 +108,23 @@ func (db *DB) nextCsnpPdu() []byte {
 
 // cachePdu gets the cache entry (or creates it), it also returns what actual
 // index that was fetched.
-func (db *DB) cachePdu(i int) ([]byte, int) {
-	count := len(db.cache.pdus)
-	if i < count {
-		return db.cache.pdus[i], i
+func (db *DB) cachePdu(i *uint) []byte {
+	count := uint(len(db.cache.pdus))
+	if *i < count {
+		return db.cache.pdus[*i]
 	}
 
 	// If the cache is full, just wrap.
 	if count > 0 && isEndCsnp(db.cache.pdus[count-1]) {
-		return db.cache.pdus[0], 0
+		*i = 0
+		return db.cache.pdus[0]
 	}
 
 	// add next PDU to the cache.
+
 	db.cache.pdus = append(db.cache.pdus, db.nextCsnpPdu())
-	return db.cache.pdus[count], count
+	*i = count
+	return db.cache.pdus[count]
 }
 
 // locate the index of the PDU that contains (or should contain) this LSP entry.
@@ -131,8 +132,8 @@ func (db *DB) cacheLocate(lsphdr []byte) int {
 	lspid := Slicer(lsphdr, clns.HdrLSPLSPID, clns.LSPIDLen)
 	// Should use bi-secting algorithm
 	for i, pdu := range db.cache.pdus {
-		start := Slicer(pdu, clns.HdrCLNSSize+clns.HdrCSNPStartLSPID, clns.LSPIDLen)
-		end := Slicer(pdu, clns.HdrCLNSSize+clns.HdrCSNPEndLSPID, clns.LSPIDLen)
+		start := startSlice(pdu)
+		end := endSlice(pdu)
 		sc := bytes.Compare(lspid, start)
 		if sc < 0 {
 			// We start looking from the beginning so must be missing

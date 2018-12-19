@@ -401,10 +401,11 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 				// NEWER now, it will either remain NEWER or
 				// switch to SAME.
 				result = compareLSP(lsp, newhdr[clns.HdrLSPLifetime:])
-			} else {
-				// We've now stopped the timer we would have
-				// reset it anyway in updateLSPSegment.
 			}
+			// else {
+			//	We've now stopped the timer we would have
+			//	reset it anyway in updateLSPSegment.
+			// }
 		}
 	}
 

@@ -50,6 +50,7 @@ type Circuit interface {
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	RecvHello(pdu *RecvPDU)
+	Send([]byte, clns.LIndex)
 }
 
 // -----
@@ -378,6 +379,14 @@ func (c *CircuitLAN) IsP2P() bool {
 
 func (c *CircuitLAN) MTU() uint {
 	return uint(c.intf.MTU)
+}
+
+func (c *CircuitLAN) Send(pdu []byte, li clns.LIndex) {
+	// XXX this sucks we don't want to copy here, instead let's move to IOV
+	// packet descriptions.
+	etherp, payload := c.OpenFrame(clns.AllLxIS[li])
+	copy(payload, pdu)
+	c.outpkt <- CloseFrame(etherp, len(pdu))
 }
 
 func resolveIfname(in string) (string, error) {
