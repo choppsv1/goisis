@@ -15,10 +15,15 @@ const (
 	HdrEthSize = HdrEthLen + 2
 )
 
-// ------------------------------
-
-// ------------------------------
-const ()
+// -------------------------------
+// 802.2 LLC header offset values.
+// -------------------------------
+const (
+	HdrLLCSSAP = iota // 802.2 LLC header offset values
+	HdrLLCDSAP        // 802.2 LLC header offset values
+	HdrLLCCTRL        // 802.2 LLC header offset values
+	HdrLLCSize
+)
 
 // Frame represents an Ethernet frame
 type Frame []byte
@@ -77,25 +82,39 @@ func (e ErrOurFrame) Error() string {
 	return fmt.Sprintf("received a frame with our src mac")
 }
 
+// ErrNonLLCFrame indicates that the received Ethernet frame was an
+// non-llc frame (probably an ethertype)
+type ErrNonLLCFrame string
+
+func (e ErrNonLLCFrame) Error() string {
+	return fmt.Sprintf("%s", string(e))
+}
+
 // ValidateFrame checks the Ethernet values and return the payload or an error
 // if something is incorrect.
-func (p Frame) ValidateFrame(ourSNPA map[MAC]bool) ([]byte, error) {
+func (p Frame) ValidateLLCFrame(ourSNPA map[MAC]bool) ([]byte, []byte, error) {
 	payload := p[HdrEthSize:]
+
 	etype := p.GetTypeLen()
-	if len(payload) < 46 {
-		return nil, ErrInvalidFrame("payload < 46")
-	}
+
+	// This is causing failures b/c of lack of padding the ethernet frame to 46.
+	// if len(payload) < 46 {
+	//       return nil, nil, ErrInvalidFrame("payload < 46")
+	// }
 
 	if ours := ourSNPA[MACKey(p.GetSrc())]; ours {
-		return nil, ErrOurFrame(true)
+		return nil, nil, ErrOurFrame(true)
 	}
 
 	if etype > 1514 && etype != 0x8870 {
 		// Drop non-LLC that aren't jumbo frames
-		return nil, nil
+		return nil, nil, ErrNonLLCFrame(fmt.Sprintf("non-llc ethertype 0x%x", etype))
 	}
+
 	if etype != len(payload) {
-		return nil, ErrInvalidFrame(fmt.Sprintf("invalid ethernet frame llc len (%d) and payload (%d) mismatch", etype, len(payload)))
+		return nil, nil, ErrInvalidFrame(fmt.Sprintf("invalid ethernet frame llc len (%d) and payload (%d) mismatch", etype, len(payload)))
 	}
-	return payload, nil
+	llc := payload[:HdrLLCSize]
+	payload = payload[HdrLLCSize:]
+	return payload, llc, nil
 }

@@ -58,66 +58,66 @@ func TestISOString(t *testing.T) {
 	}
 }
 
-func TestISODecode(t *testing.T) {
+func TestISOEncode(t *testing.T) {
 	addr := []byte{0, 1, 2, 3, 4, 5, 6}
 
 	tval := addr
-	rv, err := ISODecode("00.0102.0304.0506")
+	rv, err := ISOEncode("00.0102.0304.0506")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr
-	rv, err = ISODecode("0001.0203.0405.06")
+	rv, err = ISOEncode("0001.0203.0405.06")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[1:]
-	rv, err = ISODecode("0102.0304.0506")
+	rv, err = ISOEncode("0102.0304.0506")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[:5]
-	rv, err = ISODecode("00.0102.0304")
+	rv, err = ISOEncode("00.0102.0304")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[:5]
-	rv, err = ISODecode("0001.0203.04")
+	rv, err = ISOEncode("0001.0203.04")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[1:5]
-	rv, err = ISODecode("0102.0304")
+	rv, err = ISOEncode("0102.0304")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[:3]
-	rv, err = ISODecode("00.0102")
+	rv, err = ISOEncode("00.0102")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[:3]
-	rv, err = ISODecode("0001.02")
+	rv, err = ISOEncode("0001.02")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[1:3]
-	rv, err = ISODecode("0102")
+	rv, err = ISOEncode("0102")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[1:3]
-	rv, err = ISODecode("0102")
+	rv, err = ISOEncode("0102")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[:1]
-	rv, err = ISODecode("00")
+	rv, err = ISOEncode("00")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}
 	tval = addr[:1]
-	rv, err = ISODecode("00")
+	rv, err = ISOEncode("00")
 	if !bytes.Equal(rv, tval) || err != nil {
 		t.Error(tval)
 	}

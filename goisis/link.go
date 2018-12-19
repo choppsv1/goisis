@@ -1,175 +1,257 @@
+// -*- coding: us-ascii-unix -*-
 package main
 
 import (
 	"fmt"
+	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/ether"
-	"github.com/choppsv1/goisis/raw"
+	"github.com/choppsv1/goisis/goisis/update"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/tlv"
-	"golang.org/x/net/bpf"
-	"io"
 	"net"
-	"os"
-	"syscall"
+	"time"
 )
 
-// ================================
-// Link is an IS-IS/CLNS interface.
-// ================================
+// =======
+// Globals
+// =======
+
+// lanLinkCircuitIDs is used to allocate circuit IDs
+var lanLinkCircuitIDs = [2]byte{0, 0}
+
+// ==========
+// Interfaces
+// ==========
+
+//
+// Link represents level dependent operations on a circuit.
+//
 type Link interface {
-	DISInfoChanged(level int)
+	// ClearFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
+	IsP2P() bool
+	// SetFlag(update.SxxFlag, *clns.LSPID) // No-lock uses channels
+	RecvHello(*RecvPDU) bool
 	GetOurSNPA() net.HardwareAddr
-	ProcessPacket(*RecvFrame) error
-	UpdateAdjState(*Adj, map[tlv.Type][]tlv.Data) error
+	ExpireAdj(clns.SystemID)
 }
 
-// --------------------------------------------------------
-// Frame is a type passed by value for handling raw packets
-// --------------------------------------------------------
-type RecvFrame struct {
-	pkt  []byte
-	from syscall.Sockaddr
-	link Link
+// =====
+// Types
+// =====
+
+type chgSxxFlag struct {
+	set   bool // set or clear
+	flag  update.SxxFlag
+	lspid clns.LSPID
 }
 
-// ----------------------------------------------------------------
-// LinkCommon collects common functionality from all types of links
-// ----------------------------------------------------------------
-type LinkCommon struct {
-	link    Link
-	intf    *net.Interface
-	sock    raw.IntfSocket
-	v4addrs []net.IPNet
-	v6addrs []net.IPNet
-	inpkt   chan<- *RecvFrame
-	outpkt  chan []byte
-	quit    <-chan bool
+// LinkLAN is a structure holding information on a IS-IS Specific level
+// operation on a LAN link.
+type LinkLAN struct {
+	circuit *CircuitLAN
+	l       clns.Level
+	li      clns.LIndex // level - 1 for array indexing
+
+	// Hello Process
+	helloInt  uint
+	holdMult  uint
+	priority  uint8
+	lclCircID uint8
+	lanID     clns.NodeID
+	ourlanID  clns.NodeID
+
+	// Hello Process
+	ticker     *time.Ticker
+	expireC    chan clns.SystemID
+	iihpkt     chan *RecvPDU
+	disTimer   *time.Timer
+	disElected bool
+	snpaMap    map[clns.SNPA]*Adj
+	srcidMap   map[clns.SystemID]*Adj
+
+	// Update Process
+	updb   *update.DB
+	flagsC chan chgSxxFlag
+	flags  [2]update.FlagSet
 }
 
-func (common *LinkCommon) String() string {
-	return fmt.Sprintf("Link(%s)", common.intf.Name)
+func (link *LinkLAN) String() string {
+	return fmt.Sprintf("LANLevelLink(%s l %d)", link.circuit.CircuitBase, link.l)
 }
 
-// readPackets is a go routine to read packets from link and input to channel.
-func (common *LinkCommon) readPackets() {
-	var err error
+//
+// NewLinkLAN creates a LAN link for a given IS-IS level.
+//
+func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool) *LinkLAN {
+	link := &LinkLAN{
+		circuit:  c,
+		l:        li.ToLevel(),
+		li:       li,
+		updb:     updb,
+		priority: 67, // clns.DefHelloPri,
+		helloInt: clns.DefHelloInt,
+		holdMult: clns.DefHelloMult,
+		expireC:  make(chan clns.SystemID, 10),
+		iihpkt:   make(chan *RecvPDU, 3),
+		snpaMap:  make(map[clns.SNPA]*Adj),
+		srcidMap: make(map[clns.SystemID]*Adj),
+		flagsC:   make(chan chgSxxFlag, 10),
+		flags:    [2]update.FlagSet{make(update.FlagSet), make(update.FlagSet)},
+	}
+	lanLinkCircuitIDs[li]++
+	link.lclCircID = lanLinkCircuitIDs[li]
 
-	debug(DbgFPkt, "Starting to read packets on %s\n", common)
-	for {
-		frame := RecvFrame{
-			link: common.link,
-		}
-		frame.pkt, frame.from, err = common.sock.ReadPacket()
-		if err != nil {
-			if err == io.EOF {
-				debug(DbgFPkt, "EOF reading from %s, will stop reading from link\n", common)
-				return
-			}
-			debug(DbgFPkt, "Error reading from link %s: %s\n", common.intf.Name, err)
-			continue
-		}
-		// debug(DbgFPkt, "Read packet on %s len(%d)\n", common.link, len(frame.pkt))
-		// XXX Do some early validation before sending on channel.
-		common.inpkt <- &frame
+	copy(link.ourlanID[:], GlbSystemID)
+	link.ourlanID[clns.SysIDLen] = link.lclCircID
+
+	if link.priority != 0 {
+		copy(link.lanID[:], link.ourlanID[:])
+	}
+
+	// Record our SNPA in the map of our SNPA
+	ourSNPA[ether.MACKey(c.CircuitBase.intf.HardwareAddr)] = true
+
+	// Start DIS election routine
+	dur := time.Second * time.Duration(link.helloInt*2)
+	link.disTimer = time.NewTimer(dur)
+
+	// Start Sending Hellos
+	StartHelloProcess(link, quit)
+
+	go link.processFlags()
+
+	return link
+}
+
+// IsP2P returns true if this link is operating in P2P mode.
+func (link *LinkLAN) IsP2P() bool {
+	return false
+}
+
+// GetOurSNPA returns the link's MAC address
+func (link *LinkLAN) GetOurSNPA() net.HardwareAddr {
+	return link.circuit.CircuitBase.intf.HardwareAddr
+}
+
+// ExpireAdj cause the adjacency to expire.
+func (link *LinkLAN) ExpireAdj(sysid clns.SystemID) {
+	link.expireC <- sysid
+}
+
+// -------------------
+// Adjacency Functions
+// -------------------
+
+// --------
+// Flooding
+// --------
+
+// SRM update flag
+var SRM = update.SRM
+
+// SSN update flag
+var SSN = update.SSN
+
+func (link *LinkLAN) changeFlag(flag update.SxxFlag, set bool, lspid *clns.LSPID) {
+	if set {
+		Debug(DbgFFlags, "%s: Real set of %s for %s", link, flag, *lspid)
+		link.flags[flag][*lspid] = struct{}{}
+	} else {
+		Debug(DbgFFlags, "%s: Real clear of %s for %s", link, flag, *lspid)
+		delete(link.flags[flag], *lspid)
 	}
 }
 
-// writePackets is a go routine to read packets from a channel and output to link.
-func (common *LinkCommon) writePackets() {
-	debug(DbgFPkt, "Starting to write packets on %s\n", common)
-	for {
-		debug(DbgFPkt, "XXX select in writePackets")
+func (link *LinkLAN) waitFlags() {
+	// XXX add a timer/ticker here to handle LSP flood pacing.
+	Debug(DbgFFlags, "%s: Waiting for flag changes", link)
+	select {
+	case cf := <-link.flagsC:
+		link.changeFlag(cf.flag, cf.set, &cf.lspid)
+	}
+}
+
+func (link *LinkLAN) gatherFlags() uint {
+	for count := uint(0); ; count++ {
 		select {
-		case pkt := <-common.outpkt:
-			addr := ether.Frame(pkt).GetDst()
-			debug(DbgFPkt, "[socket] <- len %d from link channel %s to %s\n",
-				len(pkt),
-				common.intf.Name,
-				addr)
-			n, err := common.sock.WritePacket(pkt, addr)
-			if err != nil {
-				debug(DbgFPkt, "Error writing packet to %s: %s\n",
-					common.intf.Name, err)
-			} else {
-				debug(DbgFPkt, "Wrote packet len %d/%d to %s\n",
-					len(pkt), n, common.intf.Name)
-			}
-		case <-common.quit:
-			debug(DbgFPkt, "Got quit signal for %s, will stop writing to link\n", common)
-			return
+		case cf := <-link.flagsC:
+			link.changeFlag(cf.flag, cf.set, &cf.lspid)
+		default:
+			return count
 		}
 	}
 }
 
-// -------------------------------------------------------------
-// NewLink allocates and initializes a new LinkCommon structure.
-// -------------------------------------------------------------
-func NewLink(link Link, ifname string, inpkt chan<- *RecvFrame, quit chan bool) (*LinkCommon, error) {
-	var err error
-
-	common := &LinkCommon{
-		link:   link,
-		inpkt:  inpkt,
-		outpkt: make(chan []byte),
-		quit:   quit,
+// fillSNP is called to fill a SNP packet with SNPEntries
+func (link *LinkLAN) fillSNP(tlvp tlv.Data) tlv.Data {
+	track, err := tlv.Open(tlvp, tlv.TypeSNPEntries, nil)
+	if err != nil {
+		panic("No TLV space with new PDU")
 	}
-
-	if common.intf, err = net.InterfaceByName(ifname); err != nil {
-		fmt.Fprintf(os.Stderr, "Error InterfaceByName: %s\n", err)
-		return nil, err
-	}
-
-	var addrs []net.Addr
-	if addrs, err = common.intf.Addrs(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error intf.Addrs: %s\n", err)
-		return nil, err
-	}
-	for _, addr := range addrs {
-		ipnet := addr.(*net.IPNet)
-		ipv4 := ipnet.IP.To4()
-		if ipv4 != nil {
-			ipnet.IP = ipv4
-			common.v4addrs = append(common.v4addrs, *ipnet)
+	for lspid := range link.flags[SSN] {
+		var err error
+		var p tlv.Data
+		if p, err = track.Alloc(tlv.SNPEntSize); err != nil {
+			// Assert that this is the error we expect.
+			_ = err.(tlv.ErrNoSpace)
+			break
+		}
+		if ok := link.updb.CopyLSPSNP(&lspid, p); ok {
+			link.changeFlag(SSN, false, &lspid)
 		} else {
-			common.v6addrs = append(common.v6addrs, *ipnet)
+			Debug(DbgFFlags, "%s: LSP SSN with no LSP for %s", link, lspid)
 		}
 	}
+	return track.Close()
+}
 
-	// Get raw socket connection for interface send/receive
-	if common.sock, err = raw.NewInterfaceSocket(common.intf.Name); err != nil {
-		fmt.Fprintf(os.Stderr, "Error NewInterfaceSocket: %s\n", err)
-		return nil, err
+// send all PSNP we have queued up.
+func (link *LinkLAN) sendAllPSNP() {
+	var pdutype clns.PDUType
+	if link.li == 0 {
+		pdutype = clns.PDUTypePSNPL1
+	} else {
+		pdutype = clns.PDUTypePSNPL2
 	}
 
-	// IS-IS BPF filter
-	filter, err := bpf.Assemble([]bpf.Instruction{
-		// 0: Load 2 bytes from offset 12 (ethertype)
-		bpf.LoadAbsolute{Off: 12, Size: 2},
-		// 1: Jump fwd + 1 if 0x8870 (jumbo) otherwise fwd + 0 (continue)
-		bpf.JumpIf{Cond: bpf.JumpEqual, Val: 0x8870, SkipTrue: 1},
-		// 2: Jump fwd + 3 if > 1500 (drop non-IEEE 802.2 LLC) otherwise fwd + 0 (continue)
-		bpf.JumpIf{Cond: bpf.JumpGreaterThan, Val: 1500, SkipTrue: 3},
-		// 3: Load 2 bytes from offset 14 (llc src, dst)
-		bpf.LoadAbsolute{Off: 14, Size: 2},
-		// 4: Jump fwd + 0 if 0xfefe (keep) otherwise fwd + 1 (drop)
-		bpf.JumpIf{Cond: bpf.JumpNotEqual, Val: 0xfefe, SkipTrue: 1},
-		// 5: Keep
-		bpf.RetConstant{Val: 0xffff},
-		// 6: Drop
-		bpf.RetConstant{Val: 0},
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error bpf.Assemble: %s\n", err)
-		return nil, err
+	// While we have SSN flags send PSNP
+	for len(link.flags[SSN]) != 0 {
+		etherp, _, psnp, tlvp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.li])
+
+		// Fill fixed header values
+		copy(psnp[clns.HdrPSNPSrcID:], GlbSystemID)
+
+		// Fill as many SNP entries as we can in one PDU
+		endp := link.fillSNP(tlvp)
+
+		// Send the PDU.
+		link.circuit.outpkt <- link.circuit.ClosePDU(etherp, endp)
 	}
+}
 
-	err = common.sock.SetBPF(filter)
-	if err != nil {
-		fmt.Printf("Error setting filter: %s\n", err)
-		return nil, err
+// send all LSP we have queued up.
+func (link *LinkLAN) sendAnLSP() {
+	for lspid := range link.flags[SRM] {
+		link.changeFlag(SRM, false, &lspid)
+		etherp, payload := link.circuit.OpenFrame(clns.AllLxIS[link.li])
+		if l := link.updb.CopyLSPPayload(&lspid, payload); l != 0 {
+			Debug(DbgFFlags, "%s SENDING LSP %s len %d", link, lspid, l)
+			link.circuit.outpkt <- CloseFrame(etherp, l)
+			break
+		}
+		Debug(DbgFFlags, "%s SRM set no LSP %s\n", link, lspid)
 	}
+}
 
-	go common.readPackets()
-	go common.writePackets()
-
-	return common, nil
+// processFlags is a go routine that sets/clears flags and floods.
+func (link *LinkLAN) processFlags() {
+	for {
+		link.waitFlags()
+		count := link.gatherFlags() + 1
+		Debug(DbgFFlags, "%s Gathered %d flags", link, count)
+		for len(link.flags[SRM]) != 0 || len(link.flags[SSN]) != 0 {
+			link.sendAllPSNP()
+			link.sendAnLSP()
+		}
+	}
 }

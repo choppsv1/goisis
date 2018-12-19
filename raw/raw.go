@@ -1,5 +1,7 @@
-// +build darwin freebsd netbsd openbsd
-
+// -*- coding: utf-8 -*-
+//
+// November 9 2018, Christian Hopps <chopps@gmail.com>
+//
 package raw
 
 import (

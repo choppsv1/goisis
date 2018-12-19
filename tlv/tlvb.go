@@ -5,7 +5,9 @@
 package tlv
 
 import (
+	"encoding/binary"
 	"fmt"
+	"github.com/choppsv1/goisis/clns"
 	"net"
 	"reflect"
 	"unsafe"
@@ -24,16 +26,6 @@ type NLPID uint8
 
 // SystemID is a byte address of fixed (6) length
 type SystemID []byte
-
-// ErrNoSpace is returns from TLV adding routines when there is not enough space
-// to continue.
-type ErrNoSpace struct {
-	required, capacity int
-}
-
-func (e ErrNoSpace) Error() string {
-	return fmt.Sprintf("Not enough space (offer: %d) for TLV (ask: %d)", e.capacity, e.required)
-}
 
 func (s SystemID) String() string {
 	rv := fmt.Sprintf("%02x%02x.%02x%02x.%02x%02x",
@@ -55,7 +47,7 @@ const (
 	TypeInstanceID   = 7
 
 	TypePadding    = 8
-	TypeSnpEntries = 9
+	TypeSNPEntries = 9
 	TypeAuth       = 10
 	TypeLspBufSize = 14
 
@@ -82,7 +74,7 @@ var TypeNameMap = map[Type]string{
 	TypeISNeighbors:   "TypeISNeighbors",
 	TypeInstanceID:    "TypeInstanceID",
 	TypePadding:       "TypePadding",
-	TypeSnpEntries:    "TypeSnpEntries",
+	TypeSNPEntries:    "TypeSNPEntries",
 	TypeAuth:          "TypeAuth",
 	TypeLspBufSize:    "TypeLspBufSize",
 	TypeExtIsReach:    "TypeExtIsReach",
@@ -191,14 +183,16 @@ func (b Data) newFixedValues(alen int, atyp interface{}) error {
 type ErrTLVSpaceCorrupt string
 
 func (e ErrTLVSpaceCorrupt) Error() string {
-	return fmt.Sprintf("%s", string(e))
+	return string(e)
 }
+
+type TLVMap map[Type][]Data
 
 // ParseTLV returns a map of slices of TLVs of by TLV Type. This validates the
 // TLV lengths at the topmost level; however, it does not validate that the
 // length is correct for the TLV type or that the data is correct.
-func (b Data) ParseTLV() (map[Type][]Data, error) {
-	tlv := make(map[Type][]Data)
+func (b Data) ParseTLV() (TLVMap, error) {
+	tlv := make(TLVMap)
 
 	tlvp := b
 	for len(tlvp) > 1 {
@@ -272,9 +266,68 @@ func (b Data) NLPIDValues(nlpids *[]NLPID) error {
 	return b.newFixedValues(1, nlpids)
 }
 
-// =======================
-// TLV Insertion Functions
-// =======================
+// LSPBufSizeValue returns the value found in the TLV.
+func (b Data) LSPBufSizeValue() (uint16, error) {
+	_, l, v, err := GetTLV(b)
+	if err != nil {
+		return 0, err
+	}
+	if l != 2 {
+		return 0, fmt.Errorf("Length of data %d is not 2", l)
+	}
+	return binary.BigEndian.Uint16(v), nil
+}
+
+// TypeSNPEntries TLV value offsets
+const (
+	SNPEntLifetime = iota
+	SNPEntLSPID    = SNPEntLifetime + 2
+	SNPEntSeqNo    = SNPEntLSPID + clns.LSPIDLen
+	SNPEntCksum    = SNPEntSeqNo + 4
+	SNPEntSize     = SNPEntCksum + 2
+)
+
+func Slicer(b []byte, start int, length int) []byte {
+	return b[start : start+length]
+}
+
+// SNPEntryValues returns slice of all SNPEntry values in the TLVMap.
+func (tlvs TLVMap) SNPEntryValues() ([][]byte, error) {
+	count := 0
+	for _, b := range tlvs[TypeSNPEntries] {
+		_, l, _, err := GetTLV(b)
+		if err != nil {
+			return nil, err
+		}
+		if l%SNPEntSize != 0 {
+			return nil, ErrTLVSpaceCorrupt(
+				fmt.Sprintf("SNP Entries TLV not multiple of %d", SNPEntSize))
+		}
+		count += l / SNPEntSize
+	}
+	entries := make([][]byte, count)
+	ei := 0
+	for _, b := range tlvs[TypeSNPEntries] {
+		_, l, v, err := GetTLV(b)
+		if err != nil {
+			panic("err where none before")
+		}
+		// XXX this can be done faster using unsafe and just
+		// constructing a new map with the backing array :)
+		vi := 0
+		count = l / SNPEntSize
+		for i := 0; i < count; i++ {
+			entries[ei] = Slicer(v, vi, SNPEntSize)
+			vi += SNPEntSize
+			ei++
+		}
+	}
+	return entries, nil
+}
+
+// ===============================
+// TLV Insertion Utliity Functions
+// ===============================
 
 func min(a, b int) int {
 	if a < b {
@@ -285,52 +338,14 @@ func min(a, b int) int {
 
 // GetOffset returns the length of bytes between cur and the packet start
 // of p.
-func GetOffset(p Data, cur Data) int {
+func GetOffset(start Data, cur Data) int {
 	if cap(cur) == 0 {
 		// This means we filled the buffer perfectly
-		return len(p)
+		return len(start)
 	}
 	cp := uintptr(unsafe.Pointer(&cur[0]))
-	pp := uintptr(unsafe.Pointer(&p[0]))
-	return int(cp - pp)
-}
-
-// AddPadding adds the largest padding TLV that will fit in the packet buffer.
-func AddPadding(p Data) (Data, error) {
-	tlvlen := min(255, len(p)-2)
-	if tlvlen < 0 {
-		return nil, ErrNoSpace{2, len(p)}
-	}
-	p[0] = TypePadding
-	p[1] = byte(tlvlen)
-	return p[2+tlvlen:], nil
-}
-
-// AddArea adds the given area in a TLV.
-func AddArea(p Data, areaID []byte) (Data, error) {
-	tlvlen := len(areaID) + 1
-	if 2+tlvlen > len(p) {
-		return nil, ErrNoSpace{2 + tlvlen, len(p)}
-	}
-	p[0] = uint8(TypeAreaAddrs)
-	p[1] = byte(tlvlen)
-	p[2] = byte(tlvlen - 1)
-	copy(p[3:], areaID)
-
-	return p[2+tlvlen:], nil
-}
-
-// AddNLPID adds the array of NLPID to the packet in a TLV
-func AddNLPID(p Data, nlpid []byte) (Data, error) {
-	tlvlen := len(nlpid)
-	if 2+tlvlen > len(p) {
-		return nil, ErrNoSpace{2 + tlvlen, len(p)}
-	}
-	p[0] = TypeNLPID
-	p[1] = byte(tlvlen)
-	copy(p[2:], nlpid)
-
-	return p[2+tlvlen:], nil
+	startp := uintptr(unsafe.Pointer(&start[0]))
+	return int(cp - startp)
 }
 
 // Track is used to track an open TLV.
@@ -338,111 +353,387 @@ type Track struct {
 	Type   Type
 	start  Data
 	end    Data
+	hdrend Data
 	addhdr func(typ Type, b Data) (Data, error)
 }
 
-func _open(t *Track) error {
-	if len(t.start) < 2 {
-		return ErrNoSpace{2, len(t.start)}
+// Buffer is a buffer of TLV with an initialized header.
+type Buffer struct {
+	Hdr  Data // The TLV buffer.
+	Tlvp Data // The TLV space.
+	Endp Data // The end of the TLV data
+}
+
+// BufferTrack allows TLV insertion functions to allocate and track new TLV
+// buffer space as the buffers fill up.
+type BufferTrack struct {
+	// Immutable
+	Max  uint
+	Size uint
+
+	// Mutable
+	Buffers []Buffer
+
+	// Private
+	offset uint
+	finish func(Data, uint8) error
+	t      Track
+}
+
+// NewBufferTrack returns a buffer tracker for inserting TLVs. 'size' is the
+// size of the buffers, off is the offset to TLVs space in the buffer space, and
+// 'max' is the maximum number of buffers. 'finish' is a function to initialize
+// the header and further process the buffer (likely update the Update Process
+// with new LSP segment data)
+func NewBufferTrack(size, offset, max uint, finish func(Data, uint8) error) *BufferTrack {
+	bt := &BufferTrack{
+		Max:     max,
+		Size:    size,
+		Buffers: make([]Buffer, 0, 256),
+		offset:  offset,
+		finish:  finish,
 	}
-	t.start[0] = byte(t.Type)
-	t.end = t.start[2:]
-	if t.addhdr != nil {
-		var err error
-		if t.end, err = t.addhdr(t.Type, t.end); err != nil {
+	bt.newBuffer()
+	return bt
+}
+
+// NewSingleBufferTrack returns a simple Buffer track for use with an outside
+// allocated and initialized buffer that will not be extended.
+func NewSingleBufferTrack(tlvp Data) *BufferTrack {
+	return &BufferTrack{
+		Buffers: []Buffer{{
+			Tlvp: tlvp,
+			Endp: tlvp,
+		}},
+	}
+}
+
+func (bt *BufferTrack) closeBuffer() error {
+	count := len(bt.Buffers)
+	last := bt.Buffers[count-1]
+	pstart := last.Hdr
+	sz := GetOffset(pstart, last.Endp)
+	return bt.finish(pstart[:sz], uint8(count)-1)
+}
+
+func (bt *BufferTrack) newBuffer() error {
+	count := len(bt.Buffers)
+	if count == int(bt.Max) {
+		return fmt.Errorf("Exceeded maximum buffer space")
+	}
+	start := make([]byte, bt.Size)
+	offset := bt.offset
+	if count > 0 {
+		// Assert there's space used here Tlvp, Endp
+		if err := bt.closeBuffer(); err != nil {
 			return err
 		}
+	}
+	bt.Buffers = append(bt.Buffers, Buffer{start, start[offset:], start[offset:]})
+	return nil
+}
+
+// Close the buffer tracker (will cause final finish to be called if non-empty)
+func (bt *BufferTrack) Close() error {
+	if bt.finish == nil {
+		return nil
+	}
+
+	count := len(bt.Buffers)
+	if count == 0 {
+		return nil
+	}
+
+	last := bt.Buffers[count-1]
+	if GetOffset(last.Tlvp, last.Endp) == 0 {
+		return nil
+	}
+
+	return bt.closeBuffer()
+
+}
+
+// Check that the given TLV tracker has the required space.
+func (t *Track) Check(reqd uint) error {
+	l := uint(len(t.end))
+	if l <= reqd {
+		return ErrNoSpace{reqd, l}
 	}
 	return nil
 }
 
-// Open a TLV with optional function to add a header before the variable data.
+func _open(t *Track) error {
+	if len(t.start) < 2 {
+		return ErrNoSpace{2, uint(len(t.start))}
+	}
+	t.start[0] = byte(t.Type)
+	end := t.start[2:]
+	if t.addhdr != nil {
+		var err error
+		if end, err = t.addhdr(t.Type, end); err != nil {
+			return err
+		}
+	}
+	t.hdrend = end
+	t.end = end
+	return nil
+}
+
+// Open a rolling TLV with optional function to add a header before the variable
+// (Alloc) data, at the head of each new actual TLV is created.
 func Open(p Data, typ Type, addheader func(Type, Data) (Data, error)) (Track, error) {
-	t := Track{typ, p, nil, addheader}
+	t := Track{
+		Type:   typ,
+		start:  p,
+		addhdr: addheader,
+	}
 	return t, _open(&t)
 }
 
-// Alloc allocates space in an opened TLV.
-func (t *Track) Alloc(reqd int) (Data, error) {
-	if len(t.end) < reqd {
-		return nil, ErrNoSpace{reqd, len(t.end)}
+// Close an open TLV (sets the TLV length)
+func (t *Track) Close() Data {
+	// nil out the slices to help catch bugs
+	t.start[1] = byte(GetOffset(t.start, t.end) - 2)
+	t.start = nil
+	end := t.end
+	t.end = nil
+	return end
+}
+
+func (bt *BufferTrack) TopBuf() *Buffer {
+	return &bt.Buffers[len(bt.Buffers)-1]
+}
+
+// Alloc allocates space in an opened TLV, moves to next TLV if not enough space.
+// Will return ErrNoSpace if the buffer cannot accommodate.
+func (t *Track) Alloc(reqd uint) (Data, error) {
+	if err := t.Check(reqd); err != nil {
+		return nil, err
 	}
-	tlvlen := GetOffset(t.start, t.end)
-	if tlvlen+reqd > 255 {
-		t.start[1] = byte(tlvlen)
-		t.start = t.end
+	tlvlen := GetOffset(t.start, t.end) - 2
+	if uint(tlvlen)+reqd > 255 {
+		// No room left in TLV, close and re-open new TLV.
+		t.start = t.Close()
 		err := _open(t)
 		if err != nil {
 			return nil, err
 		}
-		// Header may have been added.
-		tlvlen = GetOffset(t.start, t.end)
-		if tlvlen+reqd > 255 {
-			return nil, ErrNoSpace{reqd, 255}
+		// Check for room left in the buffer.
+		if err := t.Check(reqd); err != nil {
+			return nil, err
 		}
-	}
-	if tlvlen+reqd > len(t.end) {
-		return nil, ErrNoSpace{tlvlen + reqd, len(t.end)}
 	}
 	p := t.end
 	t.end = t.end[reqd:]
 	return p, nil
 }
 
-// Close an open TLV.
-func (t *Track) Close() Data {
-	t.start[1] = byte(GetOffset(t.start, t.end) - 2)
-	return t.end
+// XXX use of separate Open() and Alloc() calls leaves open the possbility of
+// "empty" TLVs (i.e., just a header of an entry based TLV) at the end of a buffer.
+// Using OpenAllocTLV avoids this problem.
+
+// OpenTLV opens a TLV in a BufferTrack with optional function to add a header
+// before the variable data for each TLV that is created.
+func (bt *BufferTrack) OpenTLV(typ Type, addheader func(Type, Data) (Data, error)) error {
+	bt.t.Type = typ
+	bt.t.start = bt.TopBuf().Endp
+	bt.t.addhdr = addheader
+
+	err := _open(&bt.t)
+	if err == nil {
+		return nil
+	} else if _, nospace := err.(ErrNoSpace); !nospace {
+		// Return error not from no space.
+		return err
+	}
+	// Get more space.
+	if err := bt.newBuffer(); err != nil {
+		return err
+	}
+	bt.t.start = bt.Buffers[len(bt.Buffers)-1].Endp
+	return _open(&bt.t)
+}
+
+// Alloc allocates space in an opened TLV inside a buffer tracker allowing for N
+// TLVs to occur over M (max) buffers.
+func (bt *BufferTrack) Alloc(reqd uint) (Data, error) {
+	p, err := bt.t.Alloc(reqd)
+	if err == nil {
+		// Good!
+		return p, nil
+	}
+
+	// Return error not from no space.
+	_, nospace := err.(ErrNoSpace)
+	if !nospace {
+		// Unexpected error.
+		return nil, err
+	}
+
+	// Close the TLV but only keep it if it's non-empty, we know it was
+	// supposed to have data as the user is trying to Alloc it here.
+	bt.CloseTLV(true)
+
+	// Get more space.
+	if err := bt.newBuffer(); err != nil {
+		return nil, err
+	}
+
+	// Open another TLV of same type with required allocation.
+	// Possible recursion, but as we have just made the space available
+	// with a new buffer it won't happen again.
+	return bt.OpenWithAlloc(reqd, bt.t.Type, bt.t.addhdr)
+}
+
+// Add allocates space for and adds the value in the slice 'b'
+func (bt *BufferTrack) Add(b []byte) error {
+	p, err := bt.Alloc(uint(len(b)))
+	if err != nil {
+		return err
+	}
+	copy(p, b)
+	return nil
+}
+
+// OpenWithAlloc opens a TLV and allocates the first entry from a BufferTrack getting new buffer if needed.
+func (bt *BufferTrack) OpenWithAlloc(reqd uint, typ Type, addheader func(Type, Data) (Data, error)) (Data, error) {
+	if err := bt.OpenTLV(typ, addheader); err != nil {
+		return nil, err
+	}
+	return bt.Alloc(reqd)
+}
+
+// OpenWithAlloc opens a TLV and allocates the first entry from a BufferTrack getting new buffer if needed.
+func (bt *BufferTrack) OpenWithAdd(b []byte, typ Type, addheader func(Type, Data) (Data, error)) error {
+	if err := bt.OpenTLV(typ, addheader); err != nil {
+		return err
+	}
+	return bt.Add(b)
+}
+
+// CloseTLV closes the open TLV and updates the buffer if:
+//   1) dumpEmpty is false; or
+//   2) there non-header data present
+func (bt *BufferTrack) CloseTLV(dumpEmpty bool) {
+	if dumpEmpty && GetOffset(bt.t.hdrend, bt.t.end) == 0 {
+		// Here we are closing a TLV that we wanted to add some entry
+		// data to. dumpEmpty means the semantics are that data is
+		// expected, and if there's none in the existing Open TLV we
+		// should just forget it rather than close it and have an empty
+		// useless entry TLV in the buffer.
+		bt.t.start, bt.t.end = nil, nil
+	} else {
+		bt.Buffers[len(bt.Buffers)-1].Endp = bt.t.Close()
+	}
+}
+
+func (bt *BufferTrack) EndSpace() Data {
+	return bt.Buffers[len(bt.Buffers)-1].Endp
+}
+
+// ===============================
+// TLV Concrete Insertion Functions
+// ===============================
+
+// AddAreas adds the given areas in a TLV[s]. We expect and required everything
+// to be in one TLV here.
+func (bt *BufferTrack) AddAreas(areaIDs [][]byte) error {
+	if len(areaIDs) == 0 {
+		return nil
+	}
+
+	reqd := 0
+	for i := 0; i < len(areaIDs); i++ {
+		reqd += 1 + len(areaIDs[i])
+	}
+
+	p, err := bt.OpenWithAlloc(uint(reqd), TypeAreaAddrs, nil)
+	if err != nil {
+		return err
+	}
+
+	for _, a := range areaIDs {
+		p[0] = uint8(len(a))
+		copy(p[1:], a)
+		p = p[p[0]+1:]
+	}
+
+	bt.CloseTLV(true)
+	return nil
 }
 
 // AddAdjSNPA adds SNPA of all up adjacencies.
-func AddAdjSNPA(p Data, addrs []net.HardwareAddr) (Data, error) {
-	if len(addrs) == 0 {
-		return p, nil
+func (bt *BufferTrack) AddAdjSNPA(addrs []net.HardwareAddr) error {
+	if err := bt.OpenTLV(TypeISNeighbors, nil); err != nil {
+		return err
 	}
-
-	tlv, err := Open(p, TypeISNeighbors, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	for _, addr := range addrs {
-		var p Data
-
-		alen := len(addr)
-		if p, err = tlv.Alloc(alen); err != nil {
-			return nil, err
+		if err := bt.Add(addr); err != nil {
+			return err
 		}
-		copy(p, addr)
 	}
-	return tlv.Close(), nil
+	bt.CloseTLV(true)
+	return nil
+}
+
+// AddHostname adds hostname TLV if hostname is not nil.
+func (bt *BufferTrack) AddHostname(hostname string) error {
+	if len(hostname) == 0 {
+		return nil
+	}
+	err := bt.OpenWithAdd([]byte(hostname), TypeHostname, nil)
+	if err == nil {
+		bt.CloseTLV(true)
+	}
+	return err
 }
 
 // AddIntfAddr adds all ip addresses as interface addresses
-func AddIntfAddrs(p Data, addrs []net.IPNet) (Data, error) {
+func (bt *BufferTrack) AddIntfAddrs(addrs []net.IPNet) error {
 	if len(addrs) == 0 {
-		return p, nil
+		return nil
 	}
-
-	var typ Type
-	if len(addrs[0].IP) == net.IPv4len {
-		typ = TypeIPv4IntfAddrs
-	} else {
-		typ = TypeIPv6IntfAddrs
-	}
-	tlv, err := Open(p, typ, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, addr := range addrs {
-		var p Data
-
-		alen := len(addr.IP)
-		if p, err = tlv.Alloc(alen); err != nil {
-			return nil, err
+	if ok := addrs[0].IP.To4(); ok != nil {
+		if err := bt.OpenTLV(TypeIPv4IntfAddrs, nil); err != nil {
+			return err
 		}
-		copy(p, addr.IP)
+		for _, addr := range addrs {
+			if err := bt.Add(addr.IP.To4()); err != nil {
+				return err
+			}
+		}
+	} else {
+		if err := bt.OpenTLV(TypeIPv6IntfAddrs, nil); err != nil {
+			return err
+		}
+		for _, addr := range addrs {
+			if err := bt.Add(addr.IP.To16()); err != nil {
+				return err
+			}
+		}
 	}
-	return tlv.Close(), nil
+	bt.CloseTLV(true)
+	return nil
+}
+
+// AddNLPID adds the array of NLPID to the packet in a TLV
+func (bt *BufferTrack) AddNLPID(nlpid []byte) error {
+	if len(nlpid) == 0 {
+		return nil
+	}
+	err := bt.OpenWithAdd(nlpid, TypeNLPID, nil)
+	bt.CloseTLV(true)
+	return err
+}
+
+// AddPadding adds the largest padding TLV that will fit in the packet buffer.
+// Only used in IIH so don't bother with handling BufferTrack
+func AddPadding(p Data) (Data, error) {
+	tlvlen := min(255, len(p)-2)
+	if tlvlen < 0 {
+		return nil, ErrNoSpace{2, uint(len(p))}
+	}
+	p[0] = TypePadding
+	p[1] = byte(tlvlen)
+	return p[2+tlvlen:], nil
 }

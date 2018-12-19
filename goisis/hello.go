@@ -1,48 +1,166 @@
+// -*- coding: utf-8 -*-
+//
+// Copyright (c) 2018, Christian Hopps
+// All Rights Reserved.
+//
+// Implement the IS-IS hello process
+//
 package main
 
 import (
 	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
-	"github.com/choppsv1/goisis/ether"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/tlv"
+	"net"
 	"time"
 )
 
-// ------------------------------------------------------------------------
-// SendHellos is a go routine that watches for hello timer events and sends
-// hellos when they are received.
-// ------------------------------------------------------------------------
-func SendLANHellos(link *LANLink, interval int, quit chan bool) error {
-	debug(DbgFPkt, "Sending hellos on %s with interval %d", link, interval)
-	ival := time.Second * time.Duration(interval)
-	ticker := time.NewTicker(ival) // XXX replace with jittered timer.
-	go func() {
-		sendLANHello(link)
-		debug(DbgFPkt, "Sent initial IIH on %s entering ticker loop", link)
-		for range ticker.C {
-			sendLANHello(link)
-		}
-	}()
-	// Wait for quit ... do we need to do this or will the ticker stop
-	// automatically? What about when ticker goes out of scope will it be
-	// GCed?
-	select {
-	case <-quit:
-		ticker.Stop()
-		debug(DbgFPkt, "Stop sending IIH on %s", link)
-	}
-	return nil
+// =========
+// Adjacency
+// =========
+
+//
+// AdjState represents the state of the IS-IS adjcency
+//
+type AdjState uint8
+
+//
+// AdjState constants for the state of the IS-IS adjcency
+//
+const (
+	AdjStateDown AdjState = iota
+	AdjStateInit
+	AdjStateUp
+)
+
+var stateStrings = map[AdjState]string{
+	AdjStateDown: "AdjStateUp",
+	AdjStateInit: "AdjStateInit",
+	AdjStateUp:   "AdjStateUp",
 }
 
-func sendLANHello(link *LANLink) error {
+func (s AdjState) String() string {
+	ss, ok := stateStrings[s]
+	if !ok {
+		return fmt.Sprintf("Unknown AdjState(%d)", s)
+	}
+	return ss
+}
+
+//
+// Adj represents an IS-IS adjacency
+//
+type Adj struct {
+	// Immutable.
+	link  Link
+	lf    clns.LevelFlag //  need to change this to LevelFlag for p2p
+	sysid clns.SystemID
+	snpa  clns.SNPA // XXX need to conditionalize this for P2P.
+
+	// Mutable.
+	State     AdjState
+	areas     [][]byte
+	holdTimer *time.Timer
+
+	// LAN state
+	lanID    clns.NodeID
+	priority uint8
+}
+
+func (a *Adj) String() string {
+	return fmt.Sprintf("Adj(%s,%s,%s)", clns.ISOString(a.sysid[:], false), a.link, a.State)
+}
+
+// =============
+// Hello Process
+// =============
+
+// StartHelloProcess starts a go routine to send and receive hellos, manage
+// adjacencies and elect DIS on LANs
+func StartHelloProcess(link *LinkLAN, quit <-chan bool) {
+	Debug(DbgFPkt, "Sending hellos on %s with interval %d", link, link.helloInt)
+	ival := time.Second * time.Duration(link.helloInt)
+	link.ticker = time.NewTicker(ival) // XXX replace with jittered timer.
+
+	go helloProcess(link, quit)
+}
+
+// sendLANHellos is a go routine that sends hellos based using a ticker
+// It also processes DIS update events.
+func helloProcess(link *LinkLAN, quit <-chan bool) {
+	disWaiting := true
+	wasWaiting := true
+
+	sendLANHello(link)
+
+	Debug(DbgFPkt, "Sent initial IIH on %s entering hello loop", link)
+	for {
+
+		var rundis bool
+		select {
+		case <-quit:
+			Debug(DbgFPkt, "Stop sending IIH on %s", link)
+			return
+		case pdu := <-link.iihpkt:
+			rundis = pdu.link.RecvHello(pdu)
+		case srcid := <-link.expireC:
+			Debug(DbgFAdj, "Adj for %s on %s expiring.", srcid, link)
+			a := link.srcidMap[srcid]
+			if a == nil {
+				Debug(DbgFAdj, "Adj for %s on %s is already gone.", srcid, link)
+				break
+			}
+			// If the adjacency was up then we need to rerun DIS election.
+			rundis = a.State == AdjStateUp
+			delete(link.snpaMap, a.snpa)
+			delete(link.srcidMap, a.sysid)
+		case <-link.disTimer.C:
+			Debug(DbgFDIS, "INFO: DIS timer fires %s", link)
+			disWaiting = false
+			rundis = true
+		case <-link.ticker.C:
+			Debug(DbgFPkt, "%s: IIH Tick Start", link)
+			sendLANHello(link)
+			Debug(DbgFPkt, "%s: IIH Tick Done", link)
+		}
+
+		if rundis {
+			if disWaiting {
+				Debug(DbgFDIS, "INFO: Suppress DIS elect on %s", link)
+			} else {
+				Debug(DbgFDIS, "INFO: DIS info changed on %s", link)
+				link.disElect(wasWaiting)
+				wasWaiting = false
+			}
+		}
+	}
+}
+
+// hasUpAdj returns true if the DB contains any Up adjacencies
+// hasUpAdjSNPA returns true if the DB contains any Up adjacencies
+
+// getAdjSNPA returns an list of SNPA for all non-DOWN adjacencies
+func (link *LinkLAN) getKnownSNPA() []net.HardwareAddr {
+	alist := make([]net.HardwareAddr, 0, len(link.srcidMap))
+	for _, a := range link.srcidMap {
+		Debug(DbgFPkt, "Sending IIH Add Adj %s", a)
+		if a.State != AdjStateDown {
+			alist = append(alist, a.snpa[:])
+		}
+	}
+	return alist
+}
+
+func sendLANHello(link *LinkLAN) error {
 	var err error
 	var pdutype clns.PDUType
 
-	debug(DbgFPkt, "Sending IIH on %s", link)
+	Debug(DbgFPkt, "Sending IIH on %s", link)
 
-	if link.level == 1 {
+	if link.l == 1 {
 		pdutype = clns.PDUTypeIIHLANL1
 	} else {
 		pdutype = clns.PDUTypeIIHLANL2
@@ -50,74 +168,151 @@ func sendLANHello(link *LANLink) error {
 
 	// XXX we want the API to return payload here and later we convert frame
 	// in close so that we aren't dependent on ethernet
-	etherp, _, iihp := link.OpenPDU(pdutype, clns.AllLxIS[link.lindex])
+	etherp, _, iihp, endp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.li])
+	bt := tlv.NewSingleBufferTrack(endp)
 
 	// ----------
 	// IIH Header
 	// ----------
 
-	iihp[clns.HdrIIHLANCircType] = uint8(link.level)
+	iihp[clns.HdrIIHLANCircType] = uint8(link.l)
 	copy(iihp[clns.HdrIIHLANSrcID:], GlbSystemID)
 	pkt.PutUInt16(iihp[clns.HdrIIHLANHoldTime:],
 		uint16(link.helloInt*link.holdMult))
-	iihp[clns.HdrIIHLANPriority] = byte(clns.DefHelloPri) & 0x7F
+	iihp[clns.HdrIIHLANPriority] = byte(link.priority) & 0x7F
 	copy(iihp[clns.HdrIIHLANLANID:], link.lanID[:])
-	endp := iihp[clns.HdrIIHLANSize:]
 
 	// --------
 	// Add TLVs
 	// --------
 
-	if link.level == 1 {
-		endp, err = tlv.AddArea(endp, GlbAreaID)
-		if err != nil {
-			debug(DbgFPkt, "Error adding area TLV: %s", err)
+	if link.l == 1 {
+		if err = bt.AddAreas(GlbAreaIDs); err != nil {
+			Debug(DbgFPkt, "Error adding area TLV: %s", err)
 			return err
 		}
 	}
 
-	endp, err = tlv.AddNLPID(endp, GlbNLPID)
-	if err != nil {
-		debug(DbgFPkt, "Error adding NLPID TLV: %s", err)
+	if err = bt.AddNLPID(GlbNLPID); err != nil {
+		Debug(DbgFPkt, "Error adding NLPID TLV: %s", err)
 		return err
 	}
 
-	if len(link.v4addrs) != 0 {
-		endp, err = tlv.AddIntfAddrs(endp, link.v4addrs)
-		if err != nil {
-			return err
-		}
-	}
-	if len(link.v6addrs) != 0 {
-		endp, err = tlv.AddIntfAddrs(endp, link.v6addrs)
-		if err != nil {
-			return err
-		}
-	}
-
-	endp, err = tlv.AddAdjSNPA(endp, link.adjdb.GetAdjSNPA())
-	if err != nil {
-		debug(DbgFPkt, "Error Adding SNPA: %s", err)
+	if err = bt.AddIntfAddrs(link.circuit.v4addrs); err != nil {
 		return err
 	}
+
+	if err = bt.AddIntfAddrs(link.circuit.v6lladdrs); err != nil {
+		return err
+	}
+
+	if err = bt.AddAdjSNPA(link.getKnownSNPA()); err != nil {
+		Debug(DbgFPkt, "Error Adding SNPA: %s", err)
+		return err
+	}
+
+	if err = bt.Close(); err != nil {
+		return err
+	}
+
+	endp = bt.EndSpace()
 
 	// Pad to MTU
 	for cap(endp) > 1 {
 		endp, err = tlv.AddPadding(endp)
 		if err != nil {
-			debug(DbgFPkt, "Error adding Padding TLVs: %s", err)
+			Debug(DbgFPkt, "Error adding Padding TLVs: %s", err)
 			return err
 		}
 	}
 
-	link.ClosePDU(etherp, endp)
-
-	// ---------------
 	// Send the packet
-	// ---------------
-	link.outpkt <- etherp
+	link.circuit.outpkt <- link.circuit.ClosePDU(etherp, endp)
 
 	return nil
+}
+
+// Update updates the adjacency with the information from the IIH, returns true
+// if DIS election should be re-run.
+func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
+	rundis := false
+	iihp := pdu.payload[clns.HdrCLNSSize:]
+
+	if a.lf.IsLevelEnabled(1) {
+		// Update Areas
+		areas, err := pdu.tlvs[tlv.TypeAreaAddrs][0].AreaAddrsValue()
+		if err != nil {
+			Info("ERROR: processing Area Address TLV from %s: %s", a, err)
+			return true
+		}
+		a.areas = areas
+	}
+
+	if a.holdTimer != nil && !a.holdTimer.Stop() {
+		Debug(DbgFAdj, "%s failed to stop hold timer in time, letting expire", a)
+		return false
+	}
+
+	oldstate := a.State
+	a.State = AdjStateInit
+
+	if a.link.IsP2P() {
+		// XXX writeme
+	} else {
+		iih := pdu.payload[clns.HdrCLNSSize:]
+		copy(a.lanID[:], iih[clns.HdrIIHLANLANID:])
+
+		ppri := iihp[clns.HdrIIHLANPriority]
+		if ppri != a.priority {
+			a.priority = ppri
+			rundis = true
+		}
+
+		ourSNPA := a.link.GetOurSNPA()
+	forloop:
+		// Walk neighbor TLVs if we see ourselves mark adjacency Up.
+		for _, ntlv := range pdu.tlvs[tlv.TypeISNeighbors] {
+			addrs, err := ntlv.ISNeighborsValue()
+			if err != nil {
+				Info("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
+				break
+			}
+			for _, snpa := range addrs {
+				if bytes.Equal(snpa, ourSNPA) {
+					a.State = AdjStateUp
+					break forloop
+				}
+			}
+		}
+	}
+
+	if a.State != oldstate {
+		if a.State == AdjStateUp {
+			rundis = true
+			Trap("TRAP: AdjacencyStateChange: Up: %s", a)
+		} else if oldstate == AdjStateUp {
+			rundis = true
+			Trap("TRAP: AdjacencyStateChange: Down: %s", a)
+		}
+		Debug(DbgFAdj, "New state %s for %s", a.State, a)
+	}
+
+	// Restart the hold timer.
+	holdtime := pkt.GetUInt16(iihp[clns.HdrIIHHoldTime:])
+	if a.holdTimer == nil {
+		a.holdTimer = time.AfterFunc(time.Second*time.Duration(holdtime),
+			func() {
+				sysid := a.sysid
+				a.link.ExpireAdj(sysid)
+			})
+	} else {
+		a.holdTimer.Reset(time.Second * time.Duration(holdtime))
+	}
+
+	Debug(DbgFAdj, "%s: Updated adjacency %s for SNPA %s from %s to %s rundis %v",
+		a.link, a.sysid, a.snpa, oldstate, a.State, rundis)
+
+	return rundis
 }
 
 // ErrIIH is a general error in IIH packet processing
@@ -127,37 +322,187 @@ func (e ErrIIH) Error() string {
 	return fmt.Sprintf("ErrIIH: %s", string(e))
 }
 
-// --------------------------------------------------
+// ===================
+// LAN Hello Functions
+// ===================
+
 // RecvLANHello receives IIH from on a given LAN link
-// --------------------------------------------------
-func RecvLANHello(link *LANLink, frame *RecvFrame, payload []byte, level int, tlvs map[tlv.Type][]tlv.Data) error {
-	debug(DbgFPkt, "IIH: processign from %s", ether.Frame(frame.pkt).GetSrc())
+func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
+	Debug(DbgFPkt, "IIH: processign from %s", pdu.src)
+	var rundis bool
+
+	tlvs := pdu.tlvs
+
+	// ISO10589 8.4.2.1.c auth.
 
 	// For level 1 we must be in the same area.
-	if level == 1 {
+	if pdu.l == 1 {
+		// ISO10589 8.4.2.2: Receipt of level 1 IIH PDUs
+
 		// Expect 1 and only 1 Area TLV
 		atlv := tlvs[tlv.TypeAreaAddrs]
 		if len(atlv) != 1 {
-			return ErrIIH(fmt.Sprintf("INFO: areaMismatch: Incorrect area TLV count: %d", len(atlv)))
+			Trap("areaMismatch: Incorrect area TLV count: %d", len(atlv))
+			return rundis
 		}
 		addrs, err := atlv[0].AreaAddrsValue()
 		if err != nil {
-			return err
+			Trap("areaMismatch: Area TLV error: %s", err)
+			return rundis
 		}
 
+		// ISO10589 8.4.2.2.a: Look for our area in TLV.
 		matched := false
+	FOUND:
 		for _, addr := range addrs {
-			if bytes.Equal(GlbAreaID, addr) {
-				matched = true
-				break
+			for _, area := range GlbAreaIDs {
+				if bytes.Equal(area, addr) {
+					matched = true
+					break FOUND
+				}
 			}
 		}
 		if !matched {
-			return ErrIIH(fmt.Sprintf("TRAP areaMismatch: no matching areas"))
+			Trap("TRAP areaMismatch: no matching areas")
+			return rundis
 		}
 	}
-	// _ == rundis
-	eframe := ether.Frame(frame.pkt)
-	link.adjdb.UpdateAdj(payload, tlvs, eframe.GetSrc())
-	return nil
+
+	// ----------------
+	// Update Adjacency
+	// ----------------
+
+	a, ok := link.snpaMap[clns.HWToSNPA(pdu.src)]
+	if !ok {
+		a = &Adj{
+			link:  pdu.link,
+			lf:    pdu.l.ToFlag(),
+			sysid: clns.GetSrcID(pdu.payload),
+			snpa:  clns.HWToSNPA(pdu.src),
+		}
+		link.snpaMap[a.snpa] = a
+		link.srcidMap[a.sysid] = a
+	}
+
+	srcid := clns.GetSrcID(pdu.payload)
+	// ISO10589 8.4.2.4: Make sure snpa, srcid and nbrSysType same
+	// XXX the standard is fuzzy here, is nbrSysType supposed to
+	// trace CircType from the IIH or the value it talks about just
+	// above which is based on the IIH level.
+	if a.sysid != srcid {
+		// If the system ID changed ignore and let timeout.
+		rundis = false
+	} else {
+		rundis = a.UpdateAdj(pdu)
+	}
+	return rundis
+}
+
+// ------------
+// DIS election
+// ------------
+
+//
+// disFindBest - ISO10589: 8.4.5
+//
+// Locking: called with adjdb locked
+//
+func (link *LinkLAN) disFindBest() (bool, *Adj) {
+	electPri := link.priority
+	electID := GlbSystemID
+	var elect *Adj
+	count := 0
+	for _, a := range link.srcidMap {
+		if a.State != AdjStateUp {
+			Debug(DbgFDIS, "%s skipping non-up adj %s", link, a)
+			continue
+		}
+		count++
+		if a.priority > electPri {
+			Debug(DbgFDIS, "%s adj %s better priority %d", link, a, a.priority)
+			elect = a
+			electPri = a.priority
+			electID = a.sysid[:]
+		} else if a.priority == electPri {
+			Debug(DbgFDIS, "%s adj %s same priority %d", link, a, a.priority)
+			if bytes.Compare(a.sysid[:], electID) > 0 {
+				elect = a
+				electPri = a.priority
+				electID = a.sysid[:]
+			}
+		} else {
+			Debug(DbgFDIS, "%s adj %s worse priority %d", link, a, a.priority)
+		}
+	}
+	if count == 0 {
+		Debug(DbgFDIS, "%s no adj, no dis", link)
+		// No adjacencies, no DIS
+		return false, nil
+	}
+	return elect == nil, elect
+}
+
+func (link *LinkLAN) disSelfElect() {
+	// Always let the update process know.
+	link.updb.ElectDIS(link.circuit, link.lclCircID)
+	if link.disElected {
+		return
+	}
+
+	link.disElected = true
+
+	ival := time.Second * time.Duration(link.helloInt) / 3
+	link.ticker.Stop()
+	link.ticker = time.NewTicker(ival) // XXX replace with jittered timer.
+}
+
+func (link *LinkLAN) disSelfResign() {
+	// Always let the update process know.
+	link.updb.ResignDIS(link.circuit, link.lclCircID)
+	if !link.disElected {
+		return
+	}
+
+	link.disElected = false
+
+	ival := time.Second * time.Duration(link.helloInt)
+	link.ticker.Stop()
+	link.ticker = time.NewTicker(ival) // XXX replace with jittered timer.
+}
+
+func (link *LinkLAN) disElect(firstRun bool) {
+	Debug(DbgFDIS, "Running DIS election on %s first time %v", link, firstRun)
+
+	var newLANID clns.NodeID
+	var oldLANID clns.NodeID
+	if !firstRun {
+		oldLANID = link.lanID
+	}
+
+	electUs, electOther := link.disFindBest()
+	if electUs {
+		Debug(DbgFDIS, "%s electUS", link)
+		newLANID = link.ourlanID
+	} else if electOther != nil {
+		Debug(DbgFDIS, "%s electOther %s", link, electOther)
+		newLANID = electOther.lanID
+	} else {
+		Debug(DbgFDIS, "%s elect None!", link)
+	}
+
+	if oldLANID == newLANID {
+		Debug(DbgFDIS, "Same DIS elected: %s", newLANID)
+		return
+	}
+
+	Debug(DbgFDIS, "DIS change: old %s new %s", oldLANID, newLANID)
+
+	// newLANID may be 0s if no-one elected.
+	link.lanID = newLANID
+
+	if !electUs {
+		link.disSelfResign()
+	} else {
+		link.disSelfElect()
+	}
 }

@@ -4,34 +4,59 @@ import (
 	"flag"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
-	"github.com/choppsv1/goisis/ether"
-	"net"
+	"github.com/choppsv1/goisis/goisis/update"
+	. "github.com/choppsv1/goisis/logging" // nolint
 	"os"
 	"strings"
+	"time"
 )
 
-// GlbSystemID is the system ID of this IS-IS instance
-var GlbSystemID net.HardwareAddr
+//
+// Consolidate these into instance type to support multi-instance.
+//
 
-// GlbAreaID is the area this IS-IS instance is in.
-var GlbAreaID []byte
+// GlbISType specifies which levels IS-IS is enabled on
+var GlbISType clns.LevelFlag
+
+// GlbSystemID is the system ID of this IS-IS instance
+var GlbSystemID []byte
+
+// GlbHostname is the hostname of this IS-IS instance
+var GlbHostname string
+
+// GlbAreaIDs is the slice of our area IDs
+var GlbAreaIDs [][]byte
 
 // GlbNLPID holds an array of the NLPID that we support
 // var GlbNLPID = []byte{clns.NLPIDIPv4}
 var GlbNLPID = []byte{clns.NLPIDIPv4, clns.NLPIDIPv6}
 
-// GlbDebug are the enable debug.
-var GlbDebug = DbgFPkt | DbgFAdj
+// GlbQuit is a channel to signal go routines should end
+var GlbQuit = make(chan bool)
 
-//var GlbDebug DbgFlag
+func splitArg(argp *string) []string {
+	if argp == nil {
+		return nil
+	}
+	return strings.FieldsFunc(*argp, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ','
+	})
+}
 
+// nolint: gocyclo
 func main() {
 	var err error
 
-	// areaIDPtr := flag.String("areaid", "00", "area id of this instance")
+	// XXX need to check for debug flags
 	iflistPtr := flag.String("iflist", "", "Space separated list of interfaces to run on")
 	playPtr := flag.Bool("play", false, "run the playground")
-	sysIDPtr := flag.String("sysid", "00:00:00:00:00:01", "system id of this instance")
+	areaIDPtr := flag.String("area", "00", "area of this instance")
+	debugPtr := flag.String("debug", "",
+		"strsep list of debug flags: all or adj,dis,flags,packet,update")
+	isTypePtr := flag.String("istype", "l-1", "l-1, l-1-2, l-2-only")
+	sysIDPtr := flag.String("sysid", "0000.0000.0001", "system id of this instance")
+	tracePtr := flag.String("trace", "",
+		"strsep list of debug flags: all or adj,dis,flags,packet,update")
 	flag.Parse()
 
 	if *playPtr {
@@ -39,50 +64,82 @@ func main() {
 		return
 	}
 
-	linkdb := NewLinkDB()
-	quit := make(chan bool)
-	GlbSystemID, err = net.ParseMAC(*sysIDPtr)
+	if err = InitLogging(tracePtr, debugPtr); err != nil {
+		panic(err)
+	}
 
-	// XXX eventually support custom areas
-	GlbAreaID = make([]byte, 1)
-	GlbAreaID[0] = 0x00
+	// Initialize instance type
+	switch *isTypePtr {
+	case "l-1":
+		GlbISType = clns.L1Flag
+		break
+	case "l-2-only":
+		GlbISType = clns.L2Flag
+		break
+	case "l-1-2":
+		GlbISType = clns.L1Flag | clns.L2Flag
+		break
+	default:
+		Panicf("Invalid istype %s", *isTypePtr)
+	}
+	fmt.Printf("IS-IS %s router\n", GlbISType)
 
-	// Get interfaces to run on.
-	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
-	for _, ifname := range strings.Fields(*iflistPtr) {
-		fmt.Printf("Adding LAN link: %q\n", ifname)
-		var lanlink *LANLink
-		lanlink, err = NewLANLink(ifname, linkdb.inpkts, quit, 1)
+	// Initialize System and AreaIDs
+
+	if GlbSystemID, err = clns.ISOEncode(*sysIDPtr); err != nil {
+		panic(err)
+	}
+	for _, s := range splitArg(areaIDPtr) {
+		a, err := clns.ISOEncode(s)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error creating link: %s\n", err)
-			os.Exit(1)
+			panic(err)
 		}
-		linkdb.links[ifname] = lanlink
-	}
-
-	processPackets(linkdb)
-	close(quit)
-}
-
-// -----------------------------------------------------------------------------
-// processPackets handles all incoming packets (frames) serially. If performance
-// is an issue we could parallelize this based on packet type etc..
-// -----------------------------------------------------------------------------
-func processPackets(linkdb *LinkDB) {
-	for {
-		select {
-		case frame := <-linkdb.inpkts:
-			debug(DbgFPkt, " <- len %d from link %s to %s from %s llclen %d\n",
-				len(frame.pkt),
-				frame.link.(*LANLink).intf.Name,
-				ether.Frame(frame.pkt).GetDst(),
-				ether.Frame(frame.pkt).GetSrc(),
-				ether.Frame(frame.pkt).GetTypeLen())
-
-			err := frame.link.ProcessPacket(frame)
-			if err != nil {
-				debug(DbgFPkt, "Error processing packet: %s\n", err)
-			}
+		GlbAreaIDs = append(GlbAreaIDs, a)
+		if len(GlbAreaIDs) > clns.MaxArea {
+			panic("More areas than allowed")
 		}
 	}
+
+	if h, err := os.Hostname(); err != nil {
+		Info("WARNING: Error getting hostname: %s", err)
+	} else {
+		GlbHostname = h
+	}
+
+	if GlbISType.IsLevelEnabled(1) {
+		fmt.Printf("System ID: %s Area IDs: %v\n", GlbSystemID, GlbAreaIDs)
+	} else {
+		fmt.Printf("System ID: %s\n", GlbSystemID)
+	}
+
+	// Initialize Update Process
+
+	var updb [2]*update.DB
+	for l := clns.Level(1); l <= 2; l++ {
+		if GlbISType.IsLevelEnabled(l) {
+			li := l.ToIndex()
+			updb[li] = update.NewDB(GlbSystemID[:], GlbISType, l, GlbAreaIDs, GlbNLPID)
+		}
+	}
+
+	// Initialize Circuit DB
+
+	cdb := NewCircuitDB()
+
+	// Add interfaces
+	fmt.Printf("%v: %q\n", iflistPtr, *iflistPtr)
+	for _, ifname := range splitArg(iflistPtr) {
+		fmt.Printf("Adding LAN link: %q\n", ifname)
+		_, err = cdb.NewCircuit(ifname, GlbISType, updb)
+		if err != nil {
+			Panicf("Error creating circuit: %s\n", err)
+		}
+	}
+
+	ticker := time.NewTicker(time.Second * 120)
+	for _ = range ticker.C {
+		Info("Keep Alive\n")
+	}
+
+	close(GlbQuit)
 }

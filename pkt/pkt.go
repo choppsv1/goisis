@@ -31,7 +31,7 @@ func GetUInt32(p []byte) uint32 {
 
 // PutUInt32 encodes a uin32 value into the the packet at the given offset in
 // network order.
-func PutUint32(p []byte, data uint32) {
+func PutUInt32(p []byte, data uint32) {
 	p[0] = uint8((data >> 24) & 0xFF)
 	p[1] = uint8((data >> 16) & 0xFF)
 	p[2] = uint8((data >> 8) & 0xFF)
