@@ -14,6 +14,13 @@ Is-IS is broken up into 3 processes by design, the Hello, Update and Decision
 processes. We have moved the update process to a separate sub-package to align
 with this design.
 
+*** Go Routines
+- One per circuit to read frames (pktflow.go:readPackets)
+- One per circuit to write frames (pktflow.go:writePackets)
+- One per LAN link (level) or per P2P link for receiving and sending hello frames
+- One per LAN link (level) or per P2P link for processing SRM/SSN flags (flooding)
+- One per level for Update Process (LSP DB) which also handles CSNP using a cache.
+
 *** No Locks
 The code has no locks. It fully utilizes go's channels to communicate rather
 than share memory.
@@ -27,6 +34,7 @@ point-to-point Circuit there will be only a single Link.
 ** External Dependencies
 
 - Adaptive Radix Trie ("github.com/plar/go-adaptive-radix-tree")
+- Gorilla Mux for serving up state ("github.com/gorilla/mux")
 
 ** TODO Missing Items
 - Own LSP Reachability

@@ -56,12 +56,12 @@ func (s AdjState) String() string {
 type Adj struct {
 	// Immutable.
 	link  Link
-	lf    clns.LevelFlag //  need to change this to LevelFlag for p2p
+	lf    clns.LevelFlag
 	sysid clns.SystemID
-	snpa  clns.SNPA // XXX need to conditionalize this for P2P.
+	snpa  clns.SNPA
 
 	// Mutable.
-	State     AdjState
+	state     AdjState
 	areas     [][]byte
 	holdTimer *time.Timer
 
@@ -71,7 +71,7 @@ type Adj struct {
 }
 
 func (a *Adj) String() string {
-	return fmt.Sprintf("Adj(%s,%s,%s)", clns.ISOString(a.sysid[:], false), a.link, a.State)
+	return fmt.Sprintf("Adj(%s,%s,%s)", clns.ISOString(a.sysid[:], false), a.link, a.state)
 }
 
 // =============
@@ -114,7 +114,7 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 				break
 			}
 			// If the adjacency was up then we need to rerun DIS election.
-			rundis = a.State == AdjStateUp
+			rundis = a.state == AdjStateUp
 			delete(link.snpaMap, a.snpa)
 			delete(link.srcidMap, a.sysid)
 		case <-link.disTimer.C:
@@ -147,7 +147,7 @@ func (link *LinkLAN) getKnownSNPA() []net.HardwareAddr {
 	alist := make([]net.HardwareAddr, 0, len(link.srcidMap))
 	for _, a := range link.srcidMap {
 		Debug(DbgFPkt, "Sending IIH Add Adj %s", a)
-		if a.State != AdjStateDown {
+		if a.state != AdjStateDown {
 			alist = append(alist, a.snpa[:])
 		}
 	}
@@ -253,8 +253,8 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 		return false
 	}
 
-	oldstate := a.State
-	a.State = AdjStateInit
+	oldstate := a.state
+	a.state = AdjStateInit
 
 	if a.link.IsP2P() {
 		// XXX writeme
@@ -279,22 +279,22 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 			}
 			for _, snpa := range addrs {
 				if bytes.Equal(snpa, ourSNPA) {
-					a.State = AdjStateUp
+					a.state = AdjStateUp
 					break forloop
 				}
 			}
 		}
 	}
 
-	if a.State != oldstate {
-		if a.State == AdjStateUp {
+	if a.state != oldstate {
+		if a.state == AdjStateUp {
 			rundis = true
 			Trap("TRAP: AdjacencyStateChange: Up: %s", a)
 		} else if oldstate == AdjStateUp {
 			rundis = true
 			Trap("TRAP: AdjacencyStateChange: Down: %s", a)
 		}
-		Debug(DbgFAdj, "New state %s for %s", a.State, a)
+		Debug(DbgFAdj, "New state %s for %s", a.state, a)
 	}
 
 	// Restart the hold timer.
@@ -310,7 +310,7 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 	}
 
 	Debug(DbgFAdj, "%s: Updated adjacency %s for SNPA %s from %s to %s rundis %v",
-		a.link, a.sysid, a.snpa, oldstate, a.State, rundis)
+		a.link, a.sysid, a.snpa, oldstate, a.state, rundis)
 
 	return rundis
 }
@@ -413,7 +413,7 @@ func (link *LinkLAN) disFindBest() (bool, *Adj) {
 	var elect *Adj
 	count := 0
 	for _, a := range link.srcidMap {
-		if a.State != AdjStateUp {
+		if a.state != AdjStateUp {
 			Debug(DbgFDIS, "%s skipping non-up adj %s", link, a)
 			continue
 		}
@@ -443,12 +443,9 @@ func (link *LinkLAN) disFindBest() (bool, *Adj) {
 }
 
 func (link *LinkLAN) disSelfElect() {
-	// Always let the update process know.
-	link.updb.ElectDIS(link.circuit, link.lclCircID)
 	if link.disElected {
 		return
 	}
-
 	link.disElected = true
 
 	ival := time.Second * time.Duration(link.helloInt) / 3
@@ -457,12 +454,9 @@ func (link *LinkLAN) disSelfElect() {
 }
 
 func (link *LinkLAN) disSelfResign() {
-	// Always let the update process know.
-	link.updb.ResignDIS(link.circuit, link.lclCircID)
 	if !link.disElected {
 		return
 	}
-
 	link.disElected = false
 
 	ival := time.Second * time.Duration(link.helloInt)
@@ -484,8 +478,12 @@ func (link *LinkLAN) disElect(firstRun bool) {
 		Debug(DbgFDIS, "%s electUS", link)
 		newLANID = link.ourlanID
 	} else if electOther != nil {
-		Debug(DbgFDIS, "%s electOther %s", link, electOther)
-		newLANID = electOther.lanID
+		if !bytes.Equal(electOther.lanID[:clns.SysIDLen], electOther.sysid[:]) {
+			Debug(DbgFDIS, "%s electOther %s Resigns!", link, electOther)
+		} else {
+			Debug(DbgFDIS, "%s electOther %s", link, electOther)
+			newLANID = electOther.lanID
+		}
 	} else {
 		Debug(DbgFDIS, "%s elect None!", link)
 	}
@@ -499,6 +497,9 @@ func (link *LinkLAN) disElect(firstRun bool) {
 
 	// newLANID may be 0s if no-one elected.
 	link.lanID = newLANID
+
+	// Always let the update process know.
+	link.updb.ChangeDIS(link.circuit, link.lanID[clns.SysIDLen])
 
 	if !electUs {
 		link.disSelfResign()

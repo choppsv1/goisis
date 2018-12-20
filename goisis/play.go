@@ -5,6 +5,7 @@ package main
 //
 
 import (
+	"encoding/json"
 	"fmt"
 	// "github.com/choppsv1/goisis/raw"
 	"github.com/choppsv1/goisis/clns"
@@ -31,6 +32,13 @@ func (mi myint) gofunc(wg *sync.WaitGroup) {
 	wg.Done()
 }
 
+type M struct {
+	//I     int
+	//Flags uint8
+	I     int   `json:"i"`
+	Flags uint8 `json:"flags"`
+}
+
 type Bar struct {
 	i int
 }
@@ -47,6 +55,17 @@ func NewFoo() *Foo {
 }
 
 func playground() {
+	var err error
+
+	{
+		m, _ := json.Marshal(true)
+		fmt.Println(string(m))
+
+		if m, err = json.Marshal(&M{2, 0x1f}); err != nil {
+			fmt.Printf("Error: %s", err)
+		}
+		fmt.Println(string(m))
+	}
 
 	mac1 := clns.HWToSNPA(clns.AllL1IS)
 	fmt.Printf("MAC %v\n", mac1)
