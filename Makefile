@@ -1,7 +1,7 @@
 
 all:
 	go install -gcflags=all="-N -l" ./...
-	sudo setcap cap_net_raw=pe ~/go/bin/goisis
+	if [ $$(uname -s) != "Darwin" ]; then sudo setcap cap_net_raw=pe ~/go/bin/goisis; fi
 
 .PHONY: docker
 
