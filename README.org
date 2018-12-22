@@ -36,7 +36,25 @@ point-to-point Circuit there will be only a single Link.
 - Adaptive Radix Trie ("github.com/plar/go-adaptive-radix-tree")
 - Gorilla Mux for serving up state ("github.com/gorilla/mux")
 
+** Implementation notes
+- Modern only; no legacy narrow metrics, no clns/clnp routing.
+- Supported RFCs of note
+  - RFC5301 Dyanmic Hostname
+  - RFC5305 Extended Reachability
+  - RFC5308 IPv6 supported
 ** TODO Missing Items
-- Own LSP Reachability
-- Implement P2P interfaces
+*** Immediate need
 - Implement Decision Process (SPF)
+- Implement P2P interfaces (RFC5303 3-way, RFC5309 p2pOverLAN)
+- RFC 6232 - purge origination (easy)
+- RFC 5306 - Restart signaling (neighbor support)
+
+*** Want
+- RFC 5310 - Generic Cryptographic Authentication
+- RFC 5304 - Cryptographic Authentication
+
+*** Maybe never.
+- RFC 5302 - Domain wide distribution, no route leaking.
+- RFC 5306 - Restart signaling (local support)
+- RFC 5307 - GMPLS
+- RFC 5311 - Simplifiied Extension of LSP space?
