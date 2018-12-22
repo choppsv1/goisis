@@ -11,7 +11,6 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
-	"github.com/choppsv1/goisis/goisis/update"
 	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
 	"github.com/choppsv1/goisis/tlv"
@@ -96,13 +95,15 @@ func StartHelloProcess(link *LinkLAN, quit <-chan bool) {
 
 // sendLANHellos is a go routine that sends hellos based using a ticker
 // It also processes DIS update events.
+// nolint: gocyclo
 func helloProcess(link *LinkLAN, quit <-chan bool) {
 	disWaiting := true
 	wasWaiting := true
 
-	sendLANHello(link)
+	if err := sendLANHello(link); err != nil {
+		Trap("%s: error sending LAN hello: %s", link, err)
+	}
 
-	Debug(DbgFPkt, "Sent initial IIH on %s entering hello loop", link)
 	for {
 
 		var rundis bool
@@ -110,8 +111,8 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 		case <-quit:
 			Debug(DbgFPkt, "Stop sending IIH on %s", link)
 			return
-		case getAdj := <-link.getAdjC:
-			link.getAdjacencies(getAdj)
+		case ga := <-link.getAdjC:
+			link.getAdjacencies(ga)
 		case pdu := <-link.iihpkt:
 			rundis = pdu.link.RecvHello(pdu)
 		case srcid := <-link.expireC:
@@ -130,9 +131,9 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 			disWaiting = false
 			rundis = true
 		case <-link.ticker.C:
-			Debug(DbgFPkt, "%s: IIH Tick Start", link)
-			sendLANHello(link)
-			Debug(DbgFPkt, "%s: IIH Tick Done", link)
+			if err := sendLANHello(link); err != nil {
+				Trap("%s: error sending LAN hello: %s", link, err)
+			}
 		}
 
 		if rundis {
@@ -150,11 +151,11 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 func (link *LinkLAN) getAdjacencies(in getAdj) {
 	if !in.forPN {
 		Debug(DbgFPkt, "Sending LANID %s on channel", link.lanID)
-		in.c <- update.AdjInfo{
+		in.c <- tlv.AdjInfo{
 			Metric: 10,
 			Nodeid: link.lanID,
 		}
-		in.c <- update.AdjDone{}
+		in.c <- tlv.AdjDone{}
 		return
 	}
 	for _, a := range link.srcidMap {
@@ -162,13 +163,13 @@ func (link *LinkLAN) getAdjacencies(in getAdj) {
 			continue
 		}
 		Debug(DbgFPkt, "Sending Up Adj %s on channel", a)
-		adj := update.AdjInfo{
+		adj := tlv.AdjInfo{
 			Metric: 10,
 		}
 		copy(adj.Nodeid[:], a.sysid[:])
 		in.c <- adj
 	}
-	in.c <- update.AdjDone{}
+	in.c <- tlv.AdjDone{}
 }
 
 // hasUpAdj returns true if the DB contains any Up adjacencies
@@ -212,7 +213,7 @@ func sendLANHello(link *LinkLAN) error {
 	copy(iihp[clns.HdrIIHLANSrcID:], GlbSystemID[:])
 	pkt.PutUInt16(iihp[clns.HdrIIHLANHoldTime:],
 		uint16(link.helloInt*link.holdMult))
-	iihp[clns.HdrIIHLANPriority] = byte(link.priority) & 0x7F
+	iihp[clns.HdrIIHLANPriority] = link.priority & 0x7F
 	copy(iihp[clns.HdrIIHLANLANID:], link.lanID[:])
 
 	// --------

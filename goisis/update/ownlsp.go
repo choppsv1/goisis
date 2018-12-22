@@ -90,62 +90,30 @@ func (db *DB) purgeOwn(pnid, segid uint8) {
 }
 
 func (db *DB) addExtReach(bt *tlv.BufferTrack, c Circuit) error {
-	if len(db.circuits) == 0 {
-		return nil
-	}
-
-	if err := bt.OpenTLV(tlv.TypeExtIsReach, nil); err != nil {
-		return err
-	}
-
-	aC := make(chan interface{}, 10)
+	C := make(chan interface{}, 10)
 	defer func() {
 		// XXX do we need to drain this too?
-		close(aC)
+		close(C)
 	}()
 
+	// Request adjacencies from all circuits or a given circuit.
 	count := 0
 	if c != nil {
 		// Request adjacencies from the given circuit
-		c.Adjacencies(aC, db.li, true)
+		c.Adjacencies(C, db.li, true)
 		count++
 	} else {
 		// Request adjacencies from all circuits
 		for _, c := range db.circuits {
-			c.Adjacencies(aC, db.li, false)
+			c.Adjacencies(C, db.li, false)
 			count++
 		}
 	}
-
-	// Read adjacency info from all circuits
-	for count > 0 {
-		result := <-aC
-		if _, ok := result.(AdjDone); ok {
-			Debug(DbgFUpd, "got AdjDone")
-			count--
-			continue
-		}
-		adj := result.(AdjInfo)
-		Debug(DbgFUpd, "got UP Adj %s", adj.Nodeid)
-
-		tlvp, err := bt.Alloc(clns.NodeIDLen + 4)
-		if err != nil {
-			return err
-		}
-
-		// Write big endian starting in last nodeid byte since
-		// metric is 3 bytes long.
-		pkt.PutUInt32(tlvp[clns.SysIDLen:], adj.Metric)
-
-		// Now copy the node ID which will overwrite the MSB of the metric
-		copy(tlvp, adj.Nodeid[:])
-	}
-
-	bt.CloseTLV(true)
-	return nil
+	return bt.AddExtReach(C, count)
 }
 
 // regenerate non-pnode ownLSP
+// nolint: gocyclo
 func (lsp *ownLSP) regenNonPNodeLSP() error {
 	Debug(DbgFUpd, "%s: Non-PN OwnLSP Generation starts", lsp.li)
 

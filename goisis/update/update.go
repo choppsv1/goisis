@@ -76,16 +76,6 @@ func (db *DB) String() string {
 	return fmt.Sprintf("UpdateDB(%s)", db.li)
 }
 
-// AdjInfo is returned by circuits after calling c.Adjacencies.
-type AdjInfo struct {
-	Metric uint32
-	Nodeid clns.NodeID
-}
-
-// AdjDone is returned by circuits after calling c.Adjacencies when the results
-// are completed.
-type AdjDone struct{}
-
 type chgCircuit struct {
 	c    Circuit // nil for remove.
 	name string

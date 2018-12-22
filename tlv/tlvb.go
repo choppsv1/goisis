@@ -737,3 +737,45 @@ func AddPadding(p Data) (Data, error) {
 	p[1] = byte(tlvlen)
 	return p[2+tlvlen:], nil
 }
+
+// AdjInfo is returned by circuits after calling c.Adjacencies.
+type AdjInfo struct {
+	Metric uint32
+	Nodeid clns.NodeID
+}
+
+// AdjDone is returned by circuits after calling c.Adjacencies when the results
+// are completed.
+type AdjDone struct{}
+
+// AddExtReach reads AdjInfo from the channel adjC adding the information to
+// Extended Reachability TLV[s]. It stops reading from the channel after it has
+// read count AdjDone values.
+func (bt *BufferTrack) AddExtReach(c <-chan interface{}, count int) error {
+	if err := bt.OpenTLV(TypeExtIsReach, nil); err != nil {
+		return err
+	}
+	for count > 0 {
+		result := <-c
+		if _, ok := result.(AdjDone); ok {
+			count--
+			continue
+		}
+
+		tlvp, err := bt.Alloc(clns.NodeIDLen + 4)
+		if err != nil {
+			return err
+		}
+
+		// Write big endian starting in last nodeid byte since
+		// metric is 3 bytes long.
+		adj := result.(AdjInfo)
+		binary.BigEndian.PutUint32(tlvp[clns.SysIDLen:], adj.Metric)
+
+		// Now copy the node ID which will overwrite the MSB of the metric
+		copy(tlvp, adj.Nodeid[:])
+	}
+
+	bt.CloseTLV(true)
+	return nil
+}

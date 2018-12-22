@@ -388,11 +388,11 @@ func (c *CircuitLAN) Send(pdu []byte, li clns.LIndex) {
 	c.outpkt <- CloseFrame(etherp, len(pdu))
 }
 
-// GetAdjacecies arranges for update.AdjInfo to be sent on the provided
+// Adjacencies arranges for tlvb.AdjInfo to be sent on the provided
 // channel for all Up adjacencies followed by sending of update.AdjDone to mark
 // the end.
-func (c *CircuitLAN) Adjacencies(result chan<- interface{}, li clns.LIndex, forPN bool) {
-	c.levlink[li].getAdjC <- getAdj{result, forPN}
+func (c *CircuitLAN) Adjacencies(C chan<- interface{}, li clns.LIndex, forPN bool) {
+	c.levlink[li].getAdjC <- getAdj{C, forPN}
 }
 
 // nolint: gocyclo
