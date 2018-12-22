@@ -395,14 +395,14 @@ func (c *CircuitLAN) Adjacencies(C chan<- interface{}, li clns.LIndex, forPN boo
 	c.levlink[li].getAdjC <- getAdj{C, forPN}
 }
 
-// IPv4Reach arranges for tlvb.IPInfo to be sent on the provided change for all
+// IPReach arranges for tlvb.IPInfo to be sent on the provided change for all
 // IPv4 reachability associated with this circuit.
-func (c *CircuitLAN) IPv4Reach(C chan<- interface{}, li clns.LIndex) {
+func (c *CircuitLAN) IPReach(ipv4 bool, C chan<- interface{}, li clns.LIndex) {
 	// XXX a circuit probably needs it's own interface address go routine.
 	// For now just spawn a go routine to act like one, we don't support
 	// dynamic address changes yet.
 	go func() {
-		for _, a := range c.Addrs(true, false) {
+		for _, a := range c.Addrs(ipv4, false) {
 			C <- tlv.IPInfo{
 				Metric: clns.DefExtIPMetric,
 				Ipnet:  a,

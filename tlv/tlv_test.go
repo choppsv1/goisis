@@ -13,7 +13,7 @@ func TestTlvF(t *testing.T) {
 }
 
 func TestNewIntfIPv4AddrsValue(t *testing.T) {
-	b := Data{TypeIPv4IntfAddrs,
+	b := Data{byte(TypeIPv4IntfAddrs),
 		4,
 		1, 2, 3, 4}
 	addr := net.IPv4(1, 2, 3, 4)
@@ -35,7 +35,7 @@ func TestNewIntfIPv4AddrsValue(t *testing.T) {
 
 // NewIntfIPv6AddrsValue returns slice of IPv6 interface addresses
 func TestNewIntfIPv6AddrsValue(t *testing.T) {
-	b := Data{TypeIPv6IntfAddrs,
+	b := Data{byte(TypeIPv6IntfAddrs),
 		16,
 		0xfc, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00,
@@ -59,7 +59,7 @@ func TestNewIntfIPv6AddrsValue(t *testing.T) {
 func TestISNeighborsValue(t *testing.T) {
 	var nbrs []SystemID
 	var err error
-	b := Data{TypeISNeighbors,
+	b := Data{byte(TypeISNeighbors),
 		6,
 		1, 2, 3, 4, 5, 6}
 

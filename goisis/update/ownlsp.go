@@ -112,7 +112,7 @@ func (db *DB) addExtISReach(bt *tlv.BufferTrack, c Circuit) error {
 	return bt.AddExtISReach(C, count)
 }
 
-func (db *DB) addExtIPv4Reach(bt *tlv.BufferTrack) error {
+func (db *DB) addExtIPReach(ipv4 bool, bt *tlv.BufferTrack) error {
 	C := make(chan interface{}, 10)
 	defer func() {
 		// XXX do we need to drain this too?
@@ -123,10 +123,10 @@ func (db *DB) addExtIPv4Reach(bt *tlv.BufferTrack) error {
 	count := 0
 	// Request adjacencies from all circuits
 	for _, c := range db.circuits {
-		c.IPv4Reach(C, db.li)
+		c.IPReach(ipv4, C, db.li)
 		count++
 	}
-	return bt.AddExtIPv4Reach(C, count)
+	return bt.AddExtIPReach(ipv4, C, count)
 }
 
 // regenerate non-pnode ownLSP
@@ -172,7 +172,11 @@ func (lsp *ownLSP) regenNonPNodeLSP() error {
 		return err
 	}
 
-	if err := lsp.db.addExtIPv4Reach(bt); err != nil {
+	if err := lsp.db.addExtIPReach(true, bt); err != nil {
+		return err
+	}
+
+	if err := lsp.db.addExtIPReach(false, bt); err != nil {
 		return err
 	}
 
@@ -236,7 +240,6 @@ func (lsp *ownLSP) regenPNodeLSP() error {
 func (lsp *ownLSP) regenLSP() error {
 	if lsp.Pnid > 0 {
 		return lsp.regenPNodeLSP()
-	} else {
-		return lsp.regenNonPNodeLSP()
 	}
+	return lsp.regenNonPNodeLSP()
 }

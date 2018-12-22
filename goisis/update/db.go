@@ -468,7 +468,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 }
 
 // nolint: gocyclo
-func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.TLVMap) {
+func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.Map) {
 	// -------------------------------------------------------------
 	// ISO10589: 7.3.15.2 "Action on receipt of sequence numbers PDU
 	// -------------------------------------------------------------
