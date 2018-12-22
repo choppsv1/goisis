@@ -148,6 +148,8 @@ const (
 	DefHelloInt    = 10
 	DefHelloMult   = 3
 	DefHelloPri    = 64
+	DefExtISMetric = 10
+	DefExtIPMetric = 1
 	LSPOrigBufSize = LSPRecvBufSize
 )
 

@@ -152,7 +152,7 @@ func (link *LinkLAN) getAdjacencies(in getAdj) {
 	if !in.forPN {
 		Debug(DbgFPkt, "Sending LANID %s on channel", link.lanID)
 		in.c <- tlv.AdjInfo{
-			Metric: 10,
+			Metric: clns.DefExtISMetric,
 			Nodeid: link.lanID,
 		}
 		in.c <- tlv.Done{}
@@ -164,7 +164,7 @@ func (link *LinkLAN) getAdjacencies(in getAdj) {
 		}
 		Debug(DbgFPkt, "Sending Up Adj %s on channel", a)
 		adj := tlv.AdjInfo{
-			Metric: 10,
+			Metric: clns.DefExtISMetric,
 		}
 		copy(adj.Nodeid[:], a.sysid[:])
 		in.c <- adj

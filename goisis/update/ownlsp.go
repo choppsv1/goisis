@@ -89,7 +89,7 @@ func (db *DB) purgeOwn(pnid, segid uint8) {
 	db.initiatePurgeLSP(lsp, false)
 }
 
-func (db *DB) addExtReach(bt *tlv.BufferTrack, c Circuit) error {
+func (db *DB) addExtISReach(bt *tlv.BufferTrack, c Circuit) error {
 	C := make(chan interface{}, 10)
 	defer func() {
 		// XXX do we need to drain this too?
@@ -109,7 +109,24 @@ func (db *DB) addExtReach(bt *tlv.BufferTrack, c Circuit) error {
 			count++
 		}
 	}
-	return bt.AddExtReach(C, count)
+	return bt.AddExtISReach(C, count)
+}
+
+func (db *DB) addExtIPv4Reach(bt *tlv.BufferTrack) error {
+	C := make(chan interface{}, 10)
+	defer func() {
+		// XXX do we need to drain this too?
+		close(C)
+	}()
+
+	// Request adjacencies from all circuits or a given circuit.
+	count := 0
+	// Request adjacencies from all circuits
+	for _, c := range db.circuits {
+		c.IPv4Reach(C, db.li)
+		count++
+	}
+	return bt.AddExtIPv4Reach(C, count)
 }
 
 // regenerate non-pnode ownLSP
@@ -151,12 +168,13 @@ func (lsp *ownLSP) regenNonPNodeLSP() error {
 
 	// IS Reach (don't use)
 
-	// Ext Reach
-	if err := lsp.db.addExtReach(bt, nil); err != nil {
+	if err := lsp.db.addExtISReach(bt, nil); err != nil {
 		return err
 	}
 
-	// Prefixes
+	if err := lsp.db.addExtIPv4Reach(bt); err != nil {
+		return err
+	}
 
 	// External Gen App
 
@@ -195,7 +213,7 @@ func (lsp *ownLSP) regenPNodeLSP() error {
 		})
 
 	// Ext Reach
-	if err := lsp.db.addExtReach(bt, lsp.c); err != nil {
+	if err := lsp.db.addExtISReach(bt, lsp.c); err != nil {
 		return err
 	}
 

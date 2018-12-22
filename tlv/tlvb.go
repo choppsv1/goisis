@@ -696,12 +696,13 @@ func (bt *BufferTrack) AddAdjSNPA(addrs []net.HardwareAddr) error {
 type AdjInfo struct {
 	Metric uint32
 	Nodeid clns.NodeID
+	Subtlv []byte
 }
 
-// AddExtReach reads AdjInfo from the channel adjC adding the information to
-// Extended Reachability TLV[s]. It stops reading from the channel after it has
-// read count AdjDone values.
-func (bt *BufferTrack) AddExtReach(c <-chan interface{}, count int) error {
+// AddExtISReach reads AdjInfo from the channel C adding the information to
+// Extended IS Reachability TLV[s] (RFC5305). It stops reading from the channel
+// after it has read count AdjDone values.
+func (bt *BufferTrack) AddExtISReach(c <-chan interface{}, count int) error {
 	defer drainChannel(c, &count)
 
 	if err := bt.OpenTLV(TypeExtIsReach, nil); err != nil {
@@ -717,18 +718,105 @@ func (bt *BufferTrack) AddExtReach(c <-chan interface{}, count int) error {
 			continue
 		}
 
-		tlvp, err := bt.Alloc(clns.NodeIDLen + 4)
+		adj := result.(AdjInfo)
+		tlvp, err := bt.Alloc(clns.NodeIDLen + uint(4) + uint(len(adj.Subtlv)))
 		if err != nil {
 			return err
 		}
 
 		// Write big endian starting in last nodeid byte since
 		// metric is 3 bytes long.
-		adj := result.(AdjInfo)
 		binary.BigEndian.PutUint32(tlvp[clns.SysIDLen:], adj.Metric)
 
 		// Now copy the node ID which will overwrite the MSB of the metric
 		copy(tlvp, adj.Nodeid[:])
+
+		// Now copy the node ID which will overwrite the MSB of the metric
+		sublen := len(adj.Subtlv)
+		if sublen > 0 {
+			tlvp[clns.NodeIDLen+3] = byte(sublen)
+			copy(tlvp[clns.NodeIDLen+4:], adj.Subtlv)
+		}
+	}
+
+	bt.CloseTLV(true)
+	return nil
+}
+
+// --------------------------
+// Extended IPv4 Reachability
+// --------------------------
+
+// Constants for the Extended IPv4 Reachability encoding.
+const (
+	ExtIPFlagDown   = byte(1 << 7)
+	ExtIPFlagSubTLV = byte(1 << 6)
+	ExtIPMaxMetric  = uint32(0xFE000000)
+)
+
+// IPInfo is received on a channel to describe adjacencies.
+type IPInfo struct {
+	Metric uint32
+	Ipnet  net.IPNet
+	Subtlv []byte
+}
+
+func lenExtIPv4(ipi *IPInfo) uint {
+	mlen, _ := ipi.Ipnet.Mask.Size()
+	blen := (mlen + 7) / 8
+	sublen := len(ipi.Subtlv)
+	if sublen > 0 {
+		return uint(6 + blen + sublen)
+	}
+	return uint(5 + blen)
+}
+
+// extIPEncoding encodes the IP into the TLV in Ext IP Reach format
+func encodeExtIPv4(tlvp []byte, ipi *IPInfo) {
+	binary.BigEndian.PutUint32(tlvp, ipi.Metric)
+	tlvp = tlvp[4:]
+
+	mlen, _ := ipi.Ipnet.Mask.Size()
+	blen := uint(mlen+7) / 8
+	sublen := uint(len(ipi.Subtlv))
+
+	tlvp[0] = byte(mlen)
+	// if !up {
+	//      tlvp[0] |= ExtIPFlagDown
+	// }
+	copy(tlvp[1:], ipi.Ipnet.IP[:blen])
+	if sublen > 0 {
+		tlvp[0] |= ExtIPFlagSubTLV
+		tlvp[1+blen] = byte(sublen)
+		copy(tlvp[2+blen:], ipi.Subtlv)
+	}
+}
+
+// AddExtIPv4Reach reads IPInfo from the channel C adding the information to
+// Extended Reachability TLV[s]. It stops reading from the channel after it has
+// read count AdjDone values.
+func (bt *BufferTrack) AddExtIPv4Reach(c <-chan interface{}, count int) error {
+	defer drainChannel(c, &count)
+
+	if err := bt.OpenTLV(TypeExtIPv4Prefix, nil); err != nil {
+		return err
+	}
+	for count > 0 {
+		result, ok := <-c
+		if !ok {
+			return fmt.Errorf("Early close on adjinfo channel remaining: %d", count)
+		}
+		if _, ok := result.(Done); ok {
+			count--
+			continue
+		}
+
+		ipi := result.(IPInfo)
+		tlvp, err := bt.Alloc(lenExtIPv4(&ipi))
+		if err != nil {
+			return err
+		}
+		encodeExtIPv4(tlvp, &ipi)
 	}
 
 	bt.CloseTLV(true)

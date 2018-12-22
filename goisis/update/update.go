@@ -35,6 +35,7 @@ const LSPGenDelay = 100 * time.Millisecond
 type Circuit interface {
 	Addrs(v4, linklocal bool) []net.IPNet
 	Adjacencies(chan<- interface{}, clns.LIndex, bool)
+	IPv4Reach(chan<- interface{}, clns.LIndex)
 	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
 	CID(clns.LIndex) uint8
 	IsP2P() bool
