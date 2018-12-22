@@ -635,6 +635,22 @@ func (bt *BufferTrack) EndSpace() Data {
 // TLV Concrete Insertion Functions
 // ===============================
 
+// Done is marker returned on a channels when the information is done being
+// sent, by whomever was sending it.
+type Done struct{}
+
+func drainChannel(C <-chan interface{}, count *int) {
+	for *count > 0 {
+		result, ok := <-C
+		if !ok {
+			return
+		}
+		if _, ok := result.(Done); ok {
+			*count--
+		}
+	}
+}
+
 // AddAreas adds the given areas in a TLV[s]. We expect and required everything
 // to be in one TLV here.
 func (bt *BufferTrack) AddAreas(areaIDs [][]byte) error {
@@ -672,6 +688,49 @@ func (bt *BufferTrack) AddAdjSNPA(addrs []net.HardwareAddr) error {
 			return err
 		}
 	}
+	bt.CloseTLV(true)
+	return nil
+}
+
+// AdjInfo is received on a channel to describe adjacencies.
+type AdjInfo struct {
+	Metric uint32
+	Nodeid clns.NodeID
+}
+
+// AddExtReach reads AdjInfo from the channel adjC adding the information to
+// Extended Reachability TLV[s]. It stops reading from the channel after it has
+// read count AdjDone values.
+func (bt *BufferTrack) AddExtReach(c <-chan interface{}, count int) error {
+	defer drainChannel(c, &count)
+
+	if err := bt.OpenTLV(TypeExtIsReach, nil); err != nil {
+		return err
+	}
+	for count > 0 {
+		result, ok := <-c
+		if !ok {
+			return fmt.Errorf("Early close on adjinfo channel remaining: %d", count)
+		}
+		if _, ok := result.(Done); ok {
+			count--
+			continue
+		}
+
+		tlvp, err := bt.Alloc(clns.NodeIDLen + 4)
+		if err != nil {
+			return err
+		}
+
+		// Write big endian starting in last nodeid byte since
+		// metric is 3 bytes long.
+		adj := result.(AdjInfo)
+		binary.BigEndian.PutUint32(tlvp[clns.SysIDLen:], adj.Metric)
+
+		// Now copy the node ID which will overwrite the MSB of the metric
+		copy(tlvp, adj.Nodeid[:])
+	}
+
 	bt.CloseTLV(true)
 	return nil
 }
@@ -736,63 +795,4 @@ func AddPadding(p Data) (Data, error) {
 	p[0] = TypePadding
 	p[1] = byte(tlvlen)
 	return p[2+tlvlen:], nil
-}
-
-// Done is marker returned on a channel when the information is done being
-// sent, by whomever was sending it.
-type Done struct{}
-
-func drainChannel(C <-chan interface{}, count *int) {
-	for *count > 0 {
-		result, ok := <-C
-		if !ok {
-			return
-		}
-		if _, ok := result.(Done); ok {
-			*count--
-		}
-	}
-}
-
-// AdjInfo is received on a channel to describe adjacencies.
-type AdjInfo struct {
-	Metric uint32
-	Nodeid clns.NodeID
-}
-
-// AddExtReach reads AdjInfo from the channel adjC adding the information to
-// Extended Reachability TLV[s]. It stops reading from the channel after it has
-// read count AdjDone values.
-func (bt *BufferTrack) AddExtReach(c <-chan interface{}, count int) error {
-	defer drainChannel(c, &count)
-
-	if err := bt.OpenTLV(TypeExtIsReach, nil); err != nil {
-		return err
-	}
-	for count > 0 {
-		result, ok := <-c
-		if !ok {
-			return fmt.Errorf("Early close on adjinfo channel remaining: %d", count)
-		}
-		if _, ok := result.(Done); ok {
-			count--
-			continue
-		}
-
-		tlvp, err := bt.Alloc(clns.NodeIDLen + 4)
-		if err != nil {
-			return err
-		}
-
-		// Write big endian starting in last nodeid byte since
-		// metric is 3 bytes long.
-		adj := result.(AdjInfo)
-		binary.BigEndian.PutUint32(tlvp[clns.SysIDLen:], adj.Metric)
-
-		// Now copy the node ID which will overwrite the MSB of the metric
-		copy(tlvp, adj.Nodeid[:])
-	}
-
-	bt.CloseTLV(true)
-	return nil
 }
