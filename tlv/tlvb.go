@@ -39,31 +39,31 @@ type Type uint8
 // ISO 10589:2002
 const (
 	TypeAreaAddrs   Type = 1
-	TypeIsReach          = 2
-	TypeISNeighbors      = 6
+	TypeIsReach     Type = 2
+	TypeISNeighbors Type = 6
 
 	//XXX Conflict!
-	TypeIsVneighbors = 7
-	TypeInstanceID   = 7
+	TypeIsVneighbors Type = 7
+	TypeInstanceID   Type = 7
 
-	TypePadding    = 8
-	TypeSNPEntries = 9
-	TypeAuth       = 10
-	TypeLspBufSize = 14
+	TypePadding    Type = 8
+	TypeSNPEntries Type = 9
+	TypeAuth       Type = 10
+	TypeLspBufSize Type = 14
 
 	//RFC5305
-	TypeExtIsReach = 22
+	TypeExtIsReach Type = 22
 
 	//RFC1195
-	TypeIPv4Iprefix   = 128
-	TypeNLPID         = 129
-	TypeIPv4Eprefix   = 130
-	TypeIPv4IntfAddrs = 132
-	TypeRouterID      = 134
-	TypeExtIPv4Prefix = 135
-	TypeHostname      = 137
-	TypeIPv6IntfAddrs = 232
-	TypeIPv6Prefix    = 236
+	TypeIPv4Iprefix   Type = 128
+	TypeNLPID         Type = 129
+	TypeIPv4Eprefix   Type = 130
+	TypeIPv4IntfAddrs Type = 132
+	TypeRouterID      Type = 134
+	TypeExtIPv4Prefix Type = 135
+	TypeHostname      Type = 137
+	TypeIPv6IntfAddrs Type = 232
+	TypeIPv6Prefix    Type = 236
 )
 
 // TypeNameMap returns string names for known TLV types
@@ -186,13 +186,14 @@ func (e ErrTLVSpaceCorrupt) Error() string {
 	return string(e)
 }
 
-type TLVMap map[Type][]Data
+// Map is a map from TLV Type codes to an array of TLV data byte slices
+type Map map[Type][]Data
 
 // ParseTLV returns a map of slices of TLVs of by TLV Type. This validates the
 // TLV lengths at the topmost level; however, it does not validate that the
 // length is correct for the TLV type or that the data is correct.
-func (b Data) ParseTLV() (TLVMap, error) {
-	tlv := make(TLVMap)
+func (b Data) ParseTLV() (Map, error) {
+	tlv := make(Map)
 
 	tlvp := b
 	for len(tlvp) > 1 {
@@ -287,12 +288,14 @@ const (
 	SNPEntSize     = SNPEntCksum + 2
 )
 
+// Slicer is a convenience function to return a slice given a start position and
+// a length
 func Slicer(b []byte, start int, length int) []byte {
 	return b[start : start+length]
 }
 
-// SNPEntryValues returns slice of all SNPEntry values in the TLVMap.
-func (tlvs TLVMap) SNPEntryValues() ([][]byte, error) {
+// SNPEntryValues returns slice of all SNPEntry values in the Map.
+func (tlvs Map) SNPEntryValues() ([][]byte, error) {
 	count := 0
 	for _, b := range tlvs[TypeSNPEntries] {
 		_, l, _, err := GetTLV(b)
@@ -500,6 +503,7 @@ func (t *Track) Close() Data {
 	return end
 }
 
+// TopBuf returns the topmost (current) buffer in the buffer track.
 func (bt *BufferTrack) TopBuf() *Buffer {
 	return &bt.Buffers[len(bt.Buffers)-1]
 }
@@ -603,7 +607,7 @@ func (bt *BufferTrack) OpenWithAlloc(reqd uint, typ Type, addheader func(Type, D
 	return bt.Alloc(reqd)
 }
 
-// OpenWithAlloc opens a TLV and allocates the first entry from a BufferTrack getting new buffer if needed.
+// OpenWithAdd opens a TLV and allocates the first entry from a BufferTrack getting new buffer if needed.
 func (bt *BufferTrack) OpenWithAdd(b []byte, typ Type, addheader func(Type, Data) (Data, error)) error {
 	if err := bt.OpenTLV(typ, addheader); err != nil {
 		return err
@@ -627,6 +631,7 @@ func (bt *BufferTrack) CloseTLV(dumpEmpty bool) {
 	}
 }
 
+// EndSpace returns the current end of the packet buffer space.
 func (bt *BufferTrack) EndSpace() Data {
 	return bt.Buffers[len(bt.Buffers)-1].Endp
 }
@@ -634,6 +639,22 @@ func (bt *BufferTrack) EndSpace() Data {
 // ===============================
 // TLV Concrete Insertion Functions
 // ===============================
+
+// Done is marker returned on a channels when the information is done being
+// sent, by whomever was sending it.
+type Done struct{}
+
+func drainChannel(C <-chan interface{}, count *int) {
+	for *count > 0 {
+		result, ok := <-C
+		if !ok {
+			return
+		}
+		if _, ok := result.(Done); ok {
+			*count--
+		}
+	}
+}
 
 // AddAreas adds the given areas in a TLV[s]. We expect and required everything
 // to be in one TLV here.
@@ -676,6 +697,165 @@ func (bt *BufferTrack) AddAdjSNPA(addrs []net.HardwareAddr) error {
 	return nil
 }
 
+// AdjInfo is received on a channel to describe adjacencies.
+type AdjInfo struct {
+	Metric uint32
+	Nodeid clns.NodeID
+	Subtlv []byte
+}
+
+// AddExtISReach reads AdjInfo from the channel C adding the information to
+// Extended IS Reachability TLV[s] (RFC5305). It stops reading from the channel
+// after it has read count AdjDone values.
+func (bt *BufferTrack) AddExtISReach(c <-chan interface{}, count int) error {
+	defer drainChannel(c, &count)
+
+	if err := bt.OpenTLV(TypeExtIsReach, nil); err != nil {
+		return err
+	}
+	for count > 0 {
+		result, ok := <-c
+		if !ok {
+			return fmt.Errorf("Early close on adjinfo channel remaining: %d", count)
+		}
+		if _, ok := result.(Done); ok {
+			count--
+			continue
+		}
+
+		adj := result.(AdjInfo)
+		tlvp, err := bt.Alloc(clns.NodeIDLen + uint(4) + uint(len(adj.Subtlv)))
+		if err != nil {
+			return err
+		}
+
+		// Write big endian starting in last nodeid byte since
+		// metric is 3 bytes long.
+		binary.BigEndian.PutUint32(tlvp[clns.SysIDLen:], adj.Metric)
+
+		// Now copy the node ID which will overwrite the MSB of the metric
+		copy(tlvp, adj.Nodeid[:])
+
+		// Now copy the node ID which will overwrite the MSB of the metric
+		sublen := len(adj.Subtlv)
+		if sublen > 0 {
+			tlvp[clns.NodeIDLen+3] = byte(sublen)
+			copy(tlvp[clns.NodeIDLen+4:], adj.Subtlv)
+		}
+	}
+
+	bt.CloseTLV(true)
+	return nil
+}
+
+// --------------------------
+// Extended IPv4 Reachability
+// --------------------------
+
+// Constants for the Extended IPv4 Reachability encoding.
+const (
+	ExtIPFlagDown       = byte(1 << 7)
+	ExtIPv4FlagSubTLV   = byte(1 << 6)
+	ExtIPv6FlagExternal = byte(1 << 6)
+	ExtIPv6FlagSubTLV   = byte(1 << 5)
+	ExtIPMaxMetric      = uint32(0xFE000000)
+)
+
+// IPInfo is received on a channel to describe adjacencies.
+type IPInfo struct {
+	Metric uint32
+	Ipnet  net.IPNet
+	Subtlv []byte
+}
+
+func lenExtIP(ipi *IPInfo) uint {
+	isv4 := ipi.Ipnet.IP.To4() != nil
+	clen := 5
+	if !isv4 {
+		// Add extra prefix len byte
+		clen++
+	}
+
+	mlen, _ := ipi.Ipnet.Mask.Size()
+	blen := (mlen + 7) / 8
+	sublen := len(ipi.Subtlv)
+
+	tlen := uint(clen + blen + sublen)
+	if sublen > 0 {
+		tlen++
+	}
+	return tlen
+}
+
+// extIPEncoding encodes the IP into the TLV in Ext IP Reach format
+func encodeExtIP(tlvp []byte, ipi *IPInfo) {
+	binary.BigEndian.PutUint32(tlvp, ipi.Metric)
+	tlvp = tlvp[4:]
+
+	isv4 := ipi.Ipnet.IP.To4() != nil
+	mlen, _ := ipi.Ipnet.Mask.Size()
+	blen := uint(mlen+7) / 8
+	sublen := uint(len(ipi.Subtlv))
+
+	// if !up {
+	//      tlvp[0] |= ExtIPFlagDown
+	// }
+	if sublen > 0 {
+		if isv4 {
+			tlvp[0] |= ExtIPv4FlagSubTLV
+		} else {
+			tlvp[0] |= ExtIPv6FlagSubTLV
+		}
+	}
+	if isv4 {
+		tlvp[0] |= byte(mlen)
+		tlvp = tlvp[1:]
+	} else {
+		tlvp[1] = byte(mlen)
+		tlvp = tlvp[2:]
+	}
+	copy(tlvp, ipi.Ipnet.IP[:blen])
+	if sublen > 0 {
+		tlvp[blen] = byte(sublen)
+		copy(tlvp[1+blen:], ipi.Subtlv)
+	}
+}
+
+// AddExtIPReach reads IPInfo from the channel C adding the information to
+// Extended Reachability TLV[s]. It stops reading from the channel after it has
+// read count AdjDone values.
+func (bt *BufferTrack) AddExtIPReach(ipv4 bool, c <-chan interface{}, count int) error {
+	defer drainChannel(c, &count)
+
+	typ := TypeExtIPv4Prefix
+	if !ipv4 {
+		typ = TypeIPv6Prefix
+	}
+	if err := bt.OpenTLV(typ, nil); err != nil {
+		return err
+	}
+	for count > 0 {
+		result, ok := <-c
+		if !ok {
+			return fmt.Errorf("Early close on adjinfo channel remaining: %d", count)
+		}
+		if _, ok := result.(Done); ok {
+			count--
+			continue
+		}
+
+		ipi := result.(IPInfo)
+		tlvp, err := bt.Alloc(lenExtIP(&ipi))
+		if err != nil {
+			return err
+		}
+		encodeExtIP(tlvp, &ipi)
+	}
+
+	bt.CloseTLV(true)
+	return nil
+}
+
 // AddHostname adds hostname TLV if hostname is not nil.
 func (bt *BufferTrack) AddHostname(hostname string) error {
 	if len(hostname) == 0 {
@@ -688,7 +868,7 @@ func (bt *BufferTrack) AddHostname(hostname string) error {
 	return err
 }
 
-// AddIntfAddr adds all ip addresses as interface addresses
+// AddIntfAddrs adds all ip addresses as interface addresses
 func (bt *BufferTrack) AddIntfAddrs(addrs []net.IPNet) error {
 	if len(addrs) == 0 {
 		return nil
@@ -733,7 +913,7 @@ func AddPadding(p Data) (Data, error) {
 	if tlvlen < 0 {
 		return nil, ErrNoSpace{2, uint(len(p))}
 	}
-	p[0] = TypePadding
+	p[0] = byte(TypePadding)
 	p[1] = byte(tlvlen)
 	return p[2+tlvlen:], nil
 }

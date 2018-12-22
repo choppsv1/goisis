@@ -3,8 +3,8 @@
 // Copyright (c) 2018, Christian Hopps
 // All Rights Reserved.
 //
+
 // Implement the IS-IS hello process
-//
 package main
 
 import (
@@ -74,6 +74,11 @@ func (a *Adj) String() string {
 	return fmt.Sprintf("Adj(%s,%s,%s)", clns.ISOString(a.sysid[:], false), a.link, a.state)
 }
 
+type getAdj struct {
+	c     chan<- interface{}
+	forPN bool
+}
+
 // =============
 // Hello Process
 // =============
@@ -90,13 +95,15 @@ func StartHelloProcess(link *LinkLAN, quit <-chan bool) {
 
 // sendLANHellos is a go routine that sends hellos based using a ticker
 // It also processes DIS update events.
+// nolint: gocyclo
 func helloProcess(link *LinkLAN, quit <-chan bool) {
 	disWaiting := true
 	wasWaiting := true
 
-	sendLANHello(link)
+	if err := sendLANHello(link); err != nil {
+		Trap("%s: error sending LAN hello: %s", link, err)
+	}
 
-	Debug(DbgFPkt, "Sent initial IIH on %s entering hello loop", link)
 	for {
 
 		var rundis bool
@@ -104,6 +111,8 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 		case <-quit:
 			Debug(DbgFPkt, "Stop sending IIH on %s", link)
 			return
+		case ga := <-link.getAdjC:
+			link.getAdjacencies(ga)
 		case pdu := <-link.iihpkt:
 			rundis = pdu.link.RecvHello(pdu)
 		case srcid := <-link.expireC:
@@ -122,9 +131,9 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 			disWaiting = false
 			rundis = true
 		case <-link.ticker.C:
-			Debug(DbgFPkt, "%s: IIH Tick Start", link)
-			sendLANHello(link)
-			Debug(DbgFPkt, "%s: IIH Tick Done", link)
+			if err := sendLANHello(link); err != nil {
+				Trap("%s: error sending LAN hello: %s", link, err)
+			}
 		}
 
 		if rundis {
@@ -137,6 +146,30 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 			}
 		}
 	}
+}
+
+func (link *LinkLAN) getAdjacencies(in getAdj) {
+	if !in.forPN {
+		Debug(DbgFPkt, "Sending LANID %s on channel", link.lanID)
+		in.c <- tlv.AdjInfo{
+			Metric: clns.DefExtISMetric,
+			Nodeid: link.lanID,
+		}
+		in.c <- tlv.Done{}
+		return
+	}
+	for _, a := range link.srcidMap {
+		if a.state != AdjStateUp {
+			continue
+		}
+		Debug(DbgFPkt, "Sending Up Adj %s on channel", a)
+		adj := tlv.AdjInfo{
+			Metric: clns.DefExtISMetric,
+		}
+		copy(adj.Nodeid[:], a.sysid[:])
+		in.c <- adj
+	}
+	in.c <- tlv.Done{}
 }
 
 // hasUpAdj returns true if the DB contains any Up adjacencies
@@ -154,6 +187,7 @@ func (link *LinkLAN) getKnownSNPA() []net.HardwareAddr {
 	return alist
 }
 
+// nolint: gocyclo
 func sendLANHello(link *LinkLAN) error {
 	var err error
 	var pdutype clns.PDUType
@@ -176,10 +210,10 @@ func sendLANHello(link *LinkLAN) error {
 	// ----------
 
 	iihp[clns.HdrIIHLANCircType] = uint8(link.l)
-	copy(iihp[clns.HdrIIHLANSrcID:], GlbSystemID)
+	copy(iihp[clns.HdrIIHLANSrcID:], GlbSystemID[:])
 	pkt.PutUInt16(iihp[clns.HdrIIHLANHoldTime:],
 		uint16(link.helloInt*link.holdMult))
-	iihp[clns.HdrIIHLANPriority] = byte(link.priority) & 0x7F
+	iihp[clns.HdrIIHLANPriority] = link.priority & 0x7F
 	copy(iihp[clns.HdrIIHLANLANID:], link.lanID[:])
 
 	// --------
@@ -232,8 +266,9 @@ func sendLANHello(link *LinkLAN) error {
 	return nil
 }
 
-// Update updates the adjacency with the information from the IIH, returns true
+// UpdateAdj updates the adjacency with the information from the IIH, returns true
 // if DIS election should be re-run.
+// nolint: gocyclo
 func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 	rundis := false
 	iihp := pdu.payload[clns.HdrCLNSSize:]
@@ -326,7 +361,7 @@ func (e ErrIIH) Error() string {
 // LAN Hello Functions
 // ===================
 
-// RecvLANHello receives IIH from on a given LAN link
+// RecvHello receives IIH from on a given LAN link
 func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 	Debug(DbgFPkt, "IIH: processign from %s", pdu.src)
 	var rundis bool
@@ -422,13 +457,13 @@ func (link *LinkLAN) disFindBest() (bool, *Adj) {
 			Debug(DbgFDIS, "%s adj %s better priority %d", link, a, a.priority)
 			elect = a
 			electPri = a.priority
-			electID = a.sysid[:]
+			electID = a.sysid
 		} else if a.priority == electPri {
 			Debug(DbgFDIS, "%s adj %s same priority %d", link, a, a.priority)
-			if bytes.Compare(a.sysid[:], electID) > 0 {
+			if bytes.Compare(a.sysid[:], electID[:]) > 0 {
 				elect = a
 				electPri = a.priority
-				electID = a.sysid[:]
+				electID = a.sysid
 			}
 		} else {
 			Debug(DbgFDIS, "%s adj %s worse priority %d", link, a, a.priority)

@@ -46,7 +46,6 @@ type Circuit interface {
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	IsP2P() bool
 	Name() string
-	MTU() uint
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	RecvHello(pdu *RecvPDU)
@@ -272,7 +271,7 @@ func NewCircuitLAN(cb *CircuitBase, lf clns.LevelFlag) (*CircuitLAN, error) {
 		}
 	}
 
-	go c.readPackets(c)
+	go c.readPackets()
 	go c.writePackets()
 
 	return c, nil
@@ -389,6 +388,31 @@ func (c *CircuitLAN) Send(pdu []byte, li clns.LIndex) {
 	c.outpkt <- CloseFrame(etherp, len(pdu))
 }
 
+// Adjacencies arranges for tlvb.AdjInfo to be sent on the provided
+// channel for all Up adjacencies followed by sending of update.AdjDone to mark
+// the end.
+func (c *CircuitLAN) Adjacencies(C chan<- interface{}, li clns.LIndex, forPN bool) {
+	c.levlink[li].getAdjC <- getAdj{C, forPN}
+}
+
+// IPReach arranges for tlvb.IPInfo to be sent on the provided change for all
+// IPv4 reachability associated with this circuit.
+func (c *CircuitLAN) IPReach(ipv4 bool, C chan<- interface{}, li clns.LIndex) {
+	// XXX a circuit probably needs it's own interface address go routine.
+	// For now just spawn a go routine to act like one, we don't support
+	// dynamic address changes yet.
+	go func() {
+		for _, a := range c.Addrs(ipv4, false) {
+			C <- tlv.IPInfo{
+				Metric: clns.DefExtIPMetric,
+				Ipnet:  a,
+			}
+		}
+		C <- tlv.Done{}
+	}()
+}
+
+// nolint: gocyclo
 func resolveIfname(in string) (string, error) {
 	// First see if in arg is an address.
 

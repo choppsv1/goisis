@@ -64,6 +64,7 @@ type LinkLAN struct {
 	ticker     *time.Ticker
 	expireC    chan clns.SystemID
 	iihpkt     chan *RecvPDU
+	getAdjC    chan getAdj
 	disTimer   *time.Timer
 	disElected bool
 	snpaMap    map[clns.SNPA]*Adj
@@ -92,6 +93,7 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 		helloInt: clns.DefHelloInt,
 		holdMult: clns.DefHelloMult,
 		expireC:  make(chan clns.SystemID, 10),
+		getAdjC:  make(chan getAdj, 10),
 		iihpkt:   make(chan *RecvPDU, 3),
 		snpaMap:  make(map[clns.SNPA]*Adj),
 		srcidMap: make(map[clns.SystemID]*Adj),
@@ -101,7 +103,7 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 	lanLinkCircuitIDs[li]++
 	link.lclCircID = lanLinkCircuitIDs[li]
 
-	copy(link.ourlanID[:], GlbSystemID)
+	copy(link.ourlanID[:], GlbSystemID[:])
 	link.ourlanID[clns.SysIDLen] = link.lclCircID
 
 	if link.priority != 0 {
@@ -219,7 +221,7 @@ func (link *LinkLAN) sendAllPSNP() {
 		etherp, _, psnp, tlvp := link.circuit.OpenPDU(pdutype, clns.AllLxIS[link.li])
 
 		// Fill fixed header values
-		copy(psnp[clns.HdrPSNPSrcID:], GlbSystemID)
+		copy(psnp[clns.HdrPSNPSrcID:], GlbSystemID[:])
 
 		// Fill as many SNP entries as we can in one PDU
 		endp := link.fillSNP(tlvp)
