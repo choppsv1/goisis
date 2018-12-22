@@ -34,6 +34,7 @@ const LSPGenDelay = 100 * time.Millisecond
 // Circuit is the interface that update requires for circuits.
 type Circuit interface {
 	Addrs(v4, linklocal bool) []net.IPNet
+	Adjacencies(chan<- interface{}, clns.LIndex, bool)
 	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
 	CID(clns.LIndex) uint8
 	IsP2P() bool
@@ -74,6 +75,16 @@ type DB struct {
 func (db *DB) String() string {
 	return fmt.Sprintf("UpdateDB(%s)", db.li)
 }
+
+// AdjInfo is returned by circuits after calling c.Adjacencies.
+type AdjInfo struct {
+	Metric uint32
+	Nodeid clns.NodeID
+}
+
+// AdjDone is returned by circuits after calling c.Adjacencies when the results
+// are completed.
+type AdjDone struct{}
 
 type chgCircuit struct {
 	c    Circuit // nil for remove.
@@ -161,8 +172,9 @@ type disInfo struct {
 }
 
 // NewDB returns a new Update Process LSP database
-func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nlpid []byte) *DB {
+func NewDB(sysid clns.SystemID, istype clns.LevelFlag, l clns.Level, areas [][]byte, nlpid []byte) *DB {
 	db := &DB{
+		sysid:     sysid,
 		istype:    istype,
 		li:        l.ToIndex(),
 		areas:     areas,
@@ -191,7 +203,6 @@ func NewDB(sysid []byte, istype clns.LevelFlag, l clns.Level, areas [][]byte, nl
 	// Create our own LSP
 	db.ownlsp[0] = newOwnLSP(0, db, nil)
 
-	copy(db.sysid[:], sysid)
 	go db.run()
 
 	return db

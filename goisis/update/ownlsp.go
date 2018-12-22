@@ -89,6 +89,62 @@ func (db *DB) purgeOwn(pnid, segid uint8) {
 	db.initiatePurgeLSP(lsp, false)
 }
 
+func (db *DB) addExtReach(bt *tlv.BufferTrack, c Circuit) error {
+	if len(db.circuits) == 0 {
+		return nil
+	}
+
+	if err := bt.OpenTLV(tlv.TypeExtIsReach, nil); err != nil {
+		return err
+	}
+
+	aC := make(chan interface{}, 10)
+	defer func() {
+		// XXX do we need to drain this too?
+		close(aC)
+	}()
+
+	count := 0
+	if c != nil {
+		// Request adjacencies from the given circuit
+		c.Adjacencies(aC, db.li, true)
+		count++
+	} else {
+		// Request adjacencies from all circuits
+		for _, c := range db.circuits {
+			c.Adjacencies(aC, db.li, false)
+			count++
+		}
+	}
+
+	// Read adjacency info from all circuits
+	for count > 0 {
+		result := <-aC
+		if _, ok := result.(AdjDone); ok {
+			Debug(DbgFUpd, "got AdjDone")
+			count--
+			continue
+		}
+		adj := result.(AdjInfo)
+		Debug(DbgFUpd, "got UP Adj %s", adj.Nodeid)
+
+		tlvp, err := bt.Alloc(clns.NodeIDLen + 4)
+		if err != nil {
+			return err
+		}
+
+		// Write big endian starting in last nodeid byte since
+		// metric is 3 bytes long.
+		pkt.PutUInt32(tlvp[clns.SysIDLen:], adj.Metric)
+
+		// Now copy the node ID which will overwrite the MSB of the metric
+		copy(tlvp, adj.Nodeid[:])
+	}
+
+	bt.CloseTLV(true)
+	return nil
+}
+
 // regenerate non-pnode ownLSP
 func (lsp *ownLSP) regenNonPNodeLSP() error {
 	Debug(DbgFUpd, "%s: Non-PN OwnLSP Generation starts", lsp.li)
@@ -128,6 +184,9 @@ func (lsp *ownLSP) regenNonPNodeLSP() error {
 	// IS Reach (don't use)
 
 	// Ext Reach
+	if err := lsp.db.addExtReach(bt, nil); err != nil {
+		return err
+	}
 
 	// Prefixes
 
@@ -159,21 +218,32 @@ func (lsp *ownLSP) purge() {
 func (lsp *ownLSP) regenPNodeLSP() error {
 	Debug(DbgFUpd, "%s: PN OwnLSP Generation starts", lsp.li)
 
+	oldseg := lsp.segments
+	lsp.segments = make(map[uint8][]byte)
+
+	bt := tlv.NewBufferTrack(clns.LSPOrigBufSize, clns.HdrCLNSSize+clns.HdrLSPSize, 256,
+		func(buf tlv.Data, i uint8) error {
+			return lsp.finishSegment(buf, i)
+		})
+
 	// Ext Reach
+	if err := lsp.db.addExtReach(bt, lsp.c); err != nil {
+		return err
+	}
 
+	if err := bt.Close(); err != nil {
+		return err
+	}
+
+	// Now purge any unsupported segments.
+	Debug(DbgFUpd, "%s: Purge own unsupported segments", lsp.li)
+	for segid := range oldseg {
+		_, present := lsp.segments[segid]
+		if !present {
+			lsp.db.purgeOwn(0, segid)
+		}
+	}
 	return nil
-
-	// return bt.Close()
-
-	// // Now purge any unsupported segments.
-	// Debug(DbgFUpd, "%s: Purge own unsupported segments", lsp.li)
-	// for segid, _ := range oldseg {
-	// 	_, present := lsp.segments[segid]
-	// 	if !present {
-	// 		purgeOwn(pnid, segid)
-	// 		// purge
-	// 	}
-	// }
 }
 
 // regenLSP regenerates the ownLSP.

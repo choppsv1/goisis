@@ -6,7 +6,6 @@ import (
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
 	. "github.com/choppsv1/goisis/logging" // nolint
-	// "github.com/gorilla/mux"
 	"os"
 	"strings"
 	"time"
@@ -20,7 +19,7 @@ import (
 var GlbISType clns.LevelFlag
 
 // GlbSystemID is the system ID of this IS-IS instance
-var GlbSystemID []byte
+var GlbSystemID clns.SystemID
 
 // GlbHostname is the hostname of this IS-IS instance
 var GlbHostname string
@@ -87,7 +86,11 @@ func main() {
 
 	// Initialize System and AreaIDs
 
-	if GlbSystemID, err = clns.ISOEncode(*sysIDPtr); err != nil {
+	sysid, err := clns.ISOEncode(*sysIDPtr)
+	if err != nil {
+		panic(err)
+	}
+	if GlbSystemID, err = clns.MakeSystemID(sysid); err != nil {
 		panic(err)
 	}
 	for _, s := range splitArg(areaIDPtr) {
@@ -119,7 +122,7 @@ func main() {
 	for l := clns.Level(1); l <= 2; l++ {
 		if GlbISType.IsLevelEnabled(l) {
 			li := l.ToIndex()
-			updb[li] = update.NewDB(GlbSystemID[:], GlbISType, l, GlbAreaIDs, GlbNLPID)
+			updb[li] = update.NewDB(GlbSystemID, GlbISType, l, GlbAreaIDs, GlbNLPID)
 		}
 	}
 
@@ -136,6 +139,8 @@ func main() {
 			Panicf("Error creating circuit: %s\n", err)
 		}
 	}
+
+	SetupManagement()
 
 	ticker := time.NewTicker(time.Second * 120)
 	for _ = range ticker.C {

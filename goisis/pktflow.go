@@ -27,19 +27,19 @@ import (
 
 // readPackets is a go routine to read packets from link and writes to a channel
 // after doing some basic validation and baking of the frame into a PDU.
-func (base *CircuitBase) readPackets(c Circuit) {
-	Debug(DbgFPkt, "Starting to read packets on %s\n", base)
+func (c *CircuitLAN) readPackets() {
+	Debug(DbgFPkt, "Starting to read packets on %s\n", c)
 	for {
-		pkt, from, err := base.sock.ReadPacket()
+		pkt, from, err := c.sock.ReadPacket()
 		if err != nil {
 			if err == io.EOF {
-				Debug(DbgFPkt, "EOF reading from %s, will stop reading from link\n", base)
+				Debug(DbgFPkt, "EOF reading from %s, will stop reading from link\n", c)
 				return
 			}
-			Debug(DbgFPkt, "Error reading from link %s: %s\n", base.intf.Name, err)
+			Debug(DbgFPkt, "Error reading from link %s: %s\n", c.intf.Name, err)
 			continue
 		}
-		// Debug(DbgFPkt, "Read packet on %s len(%d)\n", base.link, len(frame.pkt))
+		// Debug(DbgFPkt, "Read packet on %s len(%d)\n", c.link, len(frame.pkt))
 
 		// Do Frame Validation and get PDU.
 		pdu := c.FrameToPDU(pkt, from)
@@ -52,37 +52,37 @@ func (base *CircuitBase) readPackets(c Circuit) {
 		case clns.PDUTypeIIHLANL1, clns.PDUTypeIIHLANL2, clns.PDUTypeIIHP2P:
 			c.RecvHello(pdu)
 		case clns.PDUTypeLSPL1, clns.PDUTypeLSPL2:
-			base.updb[pdu.li].InputLSP(c, pdu.payload, pdu.pdutype, pdu.tlvs)
+			c.updb[pdu.li].InputLSP(c, pdu.payload, pdu.pdutype, pdu.tlvs)
 		case clns.PDUTypeCSNPL1, clns.PDUTypeCSNPL2, clns.PDUTypePSNPL1, clns.PDUTypePSNPL2:
-			base.updb[pdu.li].InputSNP(c, pdu.payload, pdu.pdutype, pdu.tlvs)
+			c.updb[pdu.li].InputSNP(c, pdu.payload, pdu.pdutype, pdu.tlvs)
 		default:
-			Debug(DbgFPkt, "Unknown PDU type %s on %s\n", pdu.pdutype, base.intf.Name)
+			Debug(DbgFPkt, "Unknown PDU type %s on %s\n", pdu.pdutype, c.intf.Name)
 		}
 
 	}
 }
 
 // writePackets is a go routine to read packets from a channel and output to link.
-func (base *CircuitBase) writePackets() {
-	Debug(DbgFPkt, "Starting to write packets on %s\n", base)
+func (c *CircuitLAN) writePackets() {
+	Debug(DbgFPkt, "Starting to write packets on %s\n", c)
 	for {
 		select {
-		case pkt := <-base.outpkt:
+		case pkt := <-c.outpkt:
 			addr := ether.Frame(pkt).GetDst()
 			Debug(DbgFPkt, "[socket] <- len %d from link channel %s to %s\n",
 				len(pkt),
-				base.intf.Name,
+				c.intf.Name,
 				addr)
-			n, err := base.sock.WritePacket(pkt, addr)
+			n, err := c.sock.WritePacket(pkt, addr)
 			if err != nil {
 				Debug(DbgFPkt, "Error writing packet to %s: %s\n",
-					base.intf.Name, err)
+					c.intf.Name, err)
 			} else {
 				Debug(DbgFPkt, "Wrote packet len %d/%d to %s\n",
-					len(pkt), n, base.intf.Name)
+					len(pkt), n, c.intf.Name)
 			}
-		case <-base.quit:
-			Debug(DbgFPkt, "Got quit signal for %s, will stop writing to link\n", base)
+		case <-c.quit:
+			Debug(DbgFPkt, "Got quit signal for %s, will stop writing to link\n", c)
 			return
 		}
 	}

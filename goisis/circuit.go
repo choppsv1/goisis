@@ -46,7 +46,6 @@ type Circuit interface {
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	IsP2P() bool
 	Name() string
-	MTU() uint
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	RecvHello(pdu *RecvPDU)
@@ -272,7 +271,7 @@ func NewCircuitLAN(cb *CircuitBase, lf clns.LevelFlag) (*CircuitLAN, error) {
 		}
 	}
 
-	go c.readPackets(c)
+	go c.readPackets()
 	go c.writePackets()
 
 	return c, nil
@@ -389,6 +388,14 @@ func (c *CircuitLAN) Send(pdu []byte, li clns.LIndex) {
 	c.outpkt <- CloseFrame(etherp, len(pdu))
 }
 
+// GetAdjacecies arranges for update.AdjInfo to be sent on the provided
+// channel for all Up adjacencies followed by sending of update.AdjDone to mark
+// the end.
+func (c *CircuitLAN) Adjacencies(result chan<- interface{}, li clns.LIndex, forPN bool) {
+	c.levlink[li].getAdjC <- getAdj{result, forPN}
+}
+
+// nolint: gocyclo
 func resolveIfname(in string) (string, error) {
 	// First see if in arg is an address.
 

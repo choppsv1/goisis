@@ -223,6 +223,35 @@ func (lf LevelFlag) String() string {
 	return fmt.Sprintf("BadLevelFlag:0x%x", int(lf))
 }
 
+// MarshalText to convert level flag to text encoding (yang value)
+func (lf LevelFlag) MarshalText() ([]byte, error) {
+	switch lf {
+	case 0x1:
+		return []byte("level-1"), nil
+	case 0x2:
+		return []byte("level-2"), nil
+	case 0x3:
+		return []byte("level-all"), nil
+	default:
+		panic("Invalid LevelFlag")
+	}
+}
+
+// UnmarshalText to convert from text (yang value) to level flag.
+func (lf *LevelFlag) UnmarshalText(text []byte) error {
+	switch string(text) {
+	case "level-1":
+		*lf = 0x1
+	case "level-2":
+		*lf = 0x2
+	case "level-all":
+		*lf = 0x3
+	default:
+		return fmt.Errorf("Invalid level string for unmarshal %s", text)
+	}
+	return nil
+}
+
 // LIndex is an IS-IS level - 1
 type LIndex int
 
@@ -394,10 +423,39 @@ func HWToSNPA(h net.HardwareAddr) (snpa SNPA) {
 // SystemID is a 6 octet system identifier all IS have uniq system IDs
 type SystemID [SysIDLen]byte
 
+// MakeSystemID constructs a SystemID from a byte slice.
+func MakeSystemID(b []byte) (SystemID, error) {
+	var sysid SystemID
+	if len(b) != SysIDLen {
+		return sysid, fmt.Errorf("Invalid system ID len %d", len(b))
+	}
+	copy(sysid[:], b)
+	return sysid, nil
+}
+
 func (s SystemID) String() string {
 	return ISOString(s[:], false)
 }
 
+// MarshalText to convert system ID to text encoding (yang value)
+func (s SystemID) MarshalText() ([]byte, error) {
+	return []byte(ISOString(s[:], false)), nil
+}
+
+// UnmarshalText to convert from text (yang value) to SystemID
+func (s *SystemID) UnmarshalText(text []byte) error {
+	b, err := ISOEncode(string(text))
+	if err != nil {
+		return err
+	}
+	sysid, err := MakeSystemID(b)
+	if err == nil {
+		*s = sysid
+	}
+	return err
+}
+
+// GetSrcID returns the system source ID from the payload.
 func GetSrcID(payload []byte) (sysid SystemID) {
 	off, ok := SrcIDOffMap[getPDUType(payload)]
 	if !ok {
@@ -420,7 +478,7 @@ func (n NodeID) String() string {
 // segments to describe an full LSP.
 type LSPID [LSPIDLen]byte
 
-// NewLSPID constructs an LSPID from it's constituents.
+// MakeLSPID constructs an LSPID from it's constituents.
 func MakeLSPID(sysid SystemID, pnid, segid uint8) LSPID {
 	var lspid LSPID
 	copy(lspid[:], sysid[:])
@@ -438,6 +496,7 @@ func LSPIDString(lspid []byte) string {
 	return ISOString(lspid[:LSPIDLen], true)
 }
 
+// LSPIDArray is an array of LSPIDs
 type LSPIDArray []LSPID
 
 func (la LSPIDArray) Len() int {
