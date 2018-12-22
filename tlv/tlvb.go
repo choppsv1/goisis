@@ -797,24 +797,27 @@ func encodeExtIP(tlvp []byte, ipi *IPInfo) {
 	blen := uint(mlen+7) / 8
 	sublen := uint(len(ipi.Subtlv))
 
-	pstart := uint(1)
-	if !isv4 {
-		pstart = uint(2)
-	}
-	tlvp[pstart-1] = byte(mlen)
-
 	// if !up {
 	//      tlvp[0] |= ExtIPFlagDown
 	// }
-	copy(tlvp[pstart:], ipi.Ipnet.IP[:blen])
 	if sublen > 0 {
 		if isv4 {
 			tlvp[0] |= ExtIPv4FlagSubTLV
 		} else {
 			tlvp[0] |= ExtIPv6FlagSubTLV
 		}
-		tlvp[pstart+blen] = byte(sublen)
-		copy(tlvp[pstart+1+blen:], ipi.Subtlv)
+	}
+	if isv4 {
+		tlvp[0] |= byte(mlen)
+		tlvp = tlvp[1:]
+	} else {
+		tlvp[1] = byte(mlen)
+		tlvp = tlvp[2:]
+	}
+	copy(tlvp, ipi.Ipnet.IP[:blen])
+	if sublen > 0 {
+		tlvp[blen] = byte(sublen)
+		copy(tlvp[1+blen:], ipi.Subtlv)
 	}
 }
 
