@@ -744,7 +744,10 @@ type Done struct{}
 
 func drainChannel(C <-chan interface{}, count *int) {
 	for *count > 0 {
-		result := <-C
+		result, ok := <-C
+		if !ok {
+			return
+		}
 		if _, ok := result.(Done); ok {
 			*count--
 		}
