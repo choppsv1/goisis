@@ -769,13 +769,22 @@ type IPInfo struct {
 }
 
 func lenExtIP(ipi *IPInfo) uint {
+	isv4 := ipi.Ipnet.IP.To4() != nil
+	clen := 5
+	if !isv4 {
+		// Add extra prefix len byte
+		clen++
+	}
+
 	mlen, _ := ipi.Ipnet.Mask.Size()
 	blen := (mlen + 7) / 8
 	sublen := len(ipi.Subtlv)
+
+	tlen := uint(clen + blen + sublen)
 	if sublen > 0 {
-		return uint(6 + blen + sublen)
+		tlen++
 	}
-	return uint(5 + blen)
+	return tlen
 }
 
 // extIPEncoding encodes the IP into the TLV in Ext IP Reach format
@@ -784,24 +793,28 @@ func encodeExtIP(tlvp []byte, ipi *IPInfo) {
 	tlvp = tlvp[4:]
 
 	isv4 := ipi.Ipnet.IP.To4() != nil
-
 	mlen, _ := ipi.Ipnet.Mask.Size()
 	blen := uint(mlen+7) / 8
 	sublen := uint(len(ipi.Subtlv))
 
-	tlvp[0] = byte(mlen)
+	pstart := uint(1)
+	if !isv4 {
+		pstart = uint(2)
+	}
+	tlvp[pstart-1] = byte(mlen)
+
 	// if !up {
 	//      tlvp[0] |= ExtIPFlagDown
 	// }
-	copy(tlvp[1:], ipi.Ipnet.IP[:blen])
+	copy(tlvp[pstart:], ipi.Ipnet.IP[:blen])
 	if sublen > 0 {
 		if isv4 {
 			tlvp[0] |= ExtIPv4FlagSubTLV
 		} else {
 			tlvp[0] |= ExtIPv6FlagSubTLV
 		}
-		tlvp[1+blen] = byte(sublen)
-		copy(tlvp[2+blen:], ipi.Subtlv)
+		tlvp[pstart+blen] = byte(sublen)
+		copy(tlvp[pstart+1+blen:], ipi.Subtlv)
 	}
 }
 
