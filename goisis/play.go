@@ -54,8 +54,25 @@ func NewFoo() *Foo {
 	return foo
 }
 
+func send10ints(C chan<- int) {
+	for i := 0; i < 10; i++ {
+		C <- i
+	}
+	fmt.Println("All done sending ints")
+}
+
 func playground() {
 	var err error
+
+	// {
+	// 	c := make(chan int, 2)
+	// 	go send10ints(c)
+	// 	for i := 0; i < 5; i++ {
+	// 		v := <-c
+	// 		fmt.Printf("received %d\n", v)
+	// 	}
+	// 	close(c)
+	// }
 
 	{
 		m, _ := json.Marshal(true)

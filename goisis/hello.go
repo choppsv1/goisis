@@ -155,7 +155,7 @@ func (link *LinkLAN) getAdjacencies(in getAdj) {
 			Metric: 10,
 			Nodeid: link.lanID,
 		}
-		in.c <- tlv.AdjDone{}
+		in.c <- tlv.Done{}
 		return
 	}
 	for _, a := range link.srcidMap {
@@ -169,7 +169,7 @@ func (link *LinkLAN) getAdjacencies(in getAdj) {
 		copy(adj.Nodeid[:], a.sysid[:])
 		in.c <- adj
 	}
-	in.c <- tlv.AdjDone{}
+	in.c <- tlv.Done{}
 }
 
 // hasUpAdj returns true if the DB contains any Up adjacencies

@@ -738,26 +738,40 @@ func AddPadding(p Data) (Data, error) {
 	return p[2+tlvlen:], nil
 }
 
-// AdjInfo is returned by circuits after calling c.Adjacencies.
+// Done is marker returned on a channel when the information is done being
+// sent, by whomever was sending it.
+type Done struct{}
+
+func drainChannel(C <-chan interface{}, count *int) {
+	for *count > 0 {
+		result := <-C
+		if _, ok := result.(Done); ok {
+			*count--
+		}
+	}
+}
+
+// AdjInfo is received on a channel to describe adjacencies.
 type AdjInfo struct {
 	Metric uint32
 	Nodeid clns.NodeID
 }
 
-// AdjDone is returned by circuits after calling c.Adjacencies when the results
-// are completed.
-type AdjDone struct{}
-
 // AddExtReach reads AdjInfo from the channel adjC adding the information to
 // Extended Reachability TLV[s]. It stops reading from the channel after it has
 // read count AdjDone values.
 func (bt *BufferTrack) AddExtReach(c <-chan interface{}, count int) error {
+	defer drainChannel(c, &count)
+
 	if err := bt.OpenTLV(TypeExtIsReach, nil); err != nil {
 		return err
 	}
 	for count > 0 {
-		result := <-c
-		if _, ok := result.(AdjDone); ok {
+		result, ok := <-c
+		if !ok {
+			return fmt.Errorf("Early close on adjinfo channel remaining: %d", count)
+		}
+		if _, ok := result.(Done); ok {
 			count--
 			continue
 		}
