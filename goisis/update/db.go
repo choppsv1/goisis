@@ -65,7 +65,7 @@ func (db *DB) get(lspid []byte) *lspSegment {
 }
 
 // newLSPSegment creates a new lspSegment struct
-func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSegment {
+func (db *DB) newLSPSegment(payload []byte, tlvs tlv.Map) *lspSegment {
 	hdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	lsp := &lspSegment{
 		payload: payload,
@@ -111,7 +111,7 @@ func (db *DB) newZeroLSPSegment(lifetime uint16, lspid *clns.LSPID, cksum uint16
 }
 
 // updateLSPSegment updates an lspSegment with a newer version received on a link.
-func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
+func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs tlv.Map) {
 	Debug(DbgFUpd, "%s: Updating %s", db, lsp)
 
 	// On entering the hold timer has already been stopped by receiveLSP
@@ -300,7 +300,7 @@ func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
 
 // receiveLSP receives an LSP from flooding
 // nolint: gocyclo
-func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
+func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs tlv.Map) {
 	// We input or own LSP here with nil circuit to differentiate.
 	fromUs := c == nil
 

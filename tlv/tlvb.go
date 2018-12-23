@@ -5,11 +5,15 @@
 package tlv
 
 import (
+	"encoding/base64"
 	"encoding/binary"
+	// "encoding/json"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"net"
 	"reflect"
+	"sort"
+	"strings"
 	"unsafe"
 )
 
@@ -64,6 +68,9 @@ const (
 	TypeHostname      Type = 137
 	TypeIPv6IntfAddrs Type = 232
 	TypeIPv6Prefix    Type = 236
+
+	// RFC7981
+	TypeRouterCap Type = 242
 )
 
 // TypeNameMap returns string names for known TLV types
@@ -87,6 +94,7 @@ var TypeNameMap = map[Type]string{
 	TypeHostname:      "TypeHostname",
 	TypeIPv6IntfAddrs: "TypeIPv6IntfAddrs",
 	TypeIPv6Prefix:    "TypeIPv6Prefix",
+	TypeRouterCap:     "TypeRouterCap",
 }
 
 func (t Type) String() string {
@@ -203,10 +211,58 @@ func (b Data) ParseTLV() (Map, error) {
 		if tlvlen+2 > len(tlvp) {
 			return nil, ErrTLVSpaceCorrupt(fmt.Sprintf("%d exceeds %d", tlvlen+2, len(tlvp)))
 		}
-		tlv[tlvtype] = append(tlv[tlvtype], tlvp)
+		tlv[tlvtype] = append(tlv[tlvtype], tlvp[:tlvlen+2])
 		tlvp = tlvp[tlvlen+2:]
 	}
 	return tlv, nil
+}
+
+func (tlvs Map) MarshalJSON() ([]byte, error) {
+	// Get sorted list of LSPIDs we have
+	var sb strings.Builder
+	if _, err := sb.WriteString("["); err != nil {
+		return nil, err
+	}
+
+	keys := make([]Type, 0, len(tlvs))
+	for k := range tlvs {
+		keys = append(keys, k)
+	}
+	fmt.Println(keys)
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	fmt.Println(keys)
+
+	firstent := true
+	for _, k := range keys {
+		if !firstent {
+			sb.WriteString(", { ")
+		} else {
+			firstent = false
+			sb.WriteString("{ ")
+		}
+		fmt.Fprintf(&sb, `"type": "%d", "name": "%s", "values": [ `, k, k)
+		switch k {
+		default:
+			// Generic dump
+			first := true
+			var tlv []byte
+			for _, tlv = range tlvs[k] {
+				// Need to cast back to get normal behavior
+				v := base64.StdEncoding.EncodeToString(tlv)
+				if first {
+					first = false
+					fmt.Fprintf(&sb, "\"%s\"", v)
+				} else {
+					fmt.Fprintf(&sb, ", %s", v)
+				}
+			}
+		}
+		sb.WriteString(" ] }")
+		fmt.Println(sb.String())
+	}
+
+	sb.WriteString("]")
+	return []byte(sb.String()), nil
 }
 
 // IntfIPv4AddrsValue returns slice of IPv4 interface addresses.

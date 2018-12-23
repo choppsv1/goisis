@@ -111,7 +111,7 @@ const (
 
 // MarshalText to convert LSPFlag to text encoding (yang value)
 func (f LSPFlags) MarshalText() ([]byte, error) {
-	sl := make([]string, 0, 8)
+	sl := make([]string, 0, 9)
 	for k, v := range LSPFlagMap {
 		if (f & k) != 0 {
 			sl = append(sl, v)

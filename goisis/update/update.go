@@ -349,13 +349,14 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 	return found
 }
 
+// YangLSP holds LSP data model with yang (not actually modeled)
 type YangLSP struct {
 	Lspid    clns.LSPID    `json:"lspid"`
 	Seqno    uint32        `json:"seqno"`
 	Lifetime uint16        `json:"lifetime"`
 	Cksum    uint16        `json:"cksum"`
 	Flags    clns.LSPFlags `json:"flags"`
-	// TLVs
+	Tlvs     tlv.Map       `json:"tlvs"`
 }
 
 func (lsp *lspSegment) yangData() *YangLSP {
@@ -365,6 +366,7 @@ func (lsp *lspSegment) yangData() *YangLSP {
 		Lifetime: lsp.checkLifetime(),
 		Cksum:    lsp.cksum(),
 		Flags:    lsp.flags(),
+		Tlvs:     lsp.tlvs,
 	}
 	return yd
 }
