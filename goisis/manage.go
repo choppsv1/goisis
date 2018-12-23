@@ -15,25 +15,32 @@ import (
 	"net/http"
 )
 
+// IFList is a yang list of interfaces
+type IFList struct {
+	Ifs []*YangInterface `json:"interface,omitempty"`
+}
+
 // YangRoot is the root of the yang module.
 type YangRoot struct {
 	Enable    bool           `json:"enable"`
 	LevelType clns.LevelFlag `json:"level-type"`
 	SystemID  clns.SystemID  `json:"system-id"`
 	//...
+	Interfaces IFList `json:"interfaces,omitempty"`
 }
 
 func errToHTTP(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
-func muxRoot(w http.ResponseWriter, r *http.Request) {
+func muxRoot(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
 	w.WriteHeader(http.StatusOK)
 
 	root := YangRoot{
-		Enable:    true,
-		LevelType: GlbISType,
-		SystemID:  GlbSystemID,
+		Enable:     true,
+		LevelType:  GlbISType,
+		SystemID:   GlbSystemID,
+		Interfaces: IFList{interfaceData(w, nil, cdb)},
 	}
 
 	jvars, err := json.Marshal(root)
@@ -273,17 +280,13 @@ func (c *CircuitLAN) YangData() *YangInterface {
 	return yd
 }
 
-func muxIntfs(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
-	w.WriteHeader(http.StatusOK)
-	vars := mux.Vars(r)
-
+func interfaceData(w http.ResponseWriter, name *string, cdb *CircuitDB) []*YangInterface {
 	var ifdata []*YangInterface
-	name, ok := vars["name"]
-	if ok {
-		c, ok := cdb.circuits[name]
+	if name != nil {
+		c, ok := cdb.circuits[*name]
 		if !ok {
-			errToHTTP(w, fmt.Errorf("No interface named %s", name))
-			return
+			errToHTTP(w, fmt.Errorf("No interface named %s", *name))
+			return nil
 		}
 		ifdata = append(ifdata, c.YangData())
 	} else {
@@ -291,7 +294,20 @@ func muxIntfs(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
 			ifdata = append(ifdata, c.YangData())
 		}
 	}
+	return ifdata
+}
 
+func muxIntfs(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
+	w.WriteHeader(http.StatusOK)
+	vars := mux.Vars(r)
+
+	var ifdata []*YangInterface
+	name, ok := vars["name"]
+	if !ok {
+		ifdata = interfaceData(w, &name, cdb)
+	} else {
+		ifdata = interfaceData(w, nil, cdb)
+	}
 	jvars, err := json.Marshal(ifdata)
 	if err != nil {
 		errToHTTP(w, err)
@@ -306,11 +322,14 @@ func muxIntfs(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
 
 // SetupManagement initializes the management interface.
 func SetupManagement(cdb *CircuitDB, updb [2]*update.DB) error {
+	rootF := func(w http.ResponseWriter, r *http.Request) {
+		muxRoot(w, r, cdb)
+	}
 	intfF := func(w http.ResponseWriter, r *http.Request) {
 		muxIntfs(w, r, cdb)
 	}
 	r := mux.NewRouter()
-	r.HandleFunc("/isis/", muxRoot)
+	r.HandleFunc("/isis", rootF)
 	r.HandleFunc("/isis/interfaces", intfF)
 	r.HandleFunc("/isis/interfaces/interface", intfF)
 	r.HandleFunc("/isis/interfaces/interface={name}", intfF)
