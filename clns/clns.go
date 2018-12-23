@@ -83,6 +83,15 @@ const (
 //
 type LSPFlags uint8
 
+var LSPFlagMap = map[LSPFlags]string{
+	LSPFOverload: "OVERLOAD",
+	LSPFMetDef:   "ATTDEF",
+	LSPFMetDly:   "ATTDLYFlag",
+	LSPFMetExp:   "ATTEXP",
+	LSPFMetErr:   "ATTERR",
+	LSPFPbit:     "PBIT",
+}
+
 // The LSP Flags
 const (
 	_ LSPFlags = 1 << iota
@@ -94,6 +103,37 @@ const (
 	LSPFMetErr
 	LSPFPbit
 )
+
+const (
+	LSPFISTypeMask = uint8(0x3)
+	LSPFlagMask    = ^uint8(0x3)
+)
+
+// MarshalText to convert LSPFlag to text encoding (yang value)
+func (f LSPFlags) MarshalText() ([]byte, error) {
+	sl := make([]string, 0, 8)
+	for k, v := range LSPFlagMap {
+		if (f & k) != 0 {
+			sl = append(sl, v)
+		}
+	}
+	return []byte(strings.Join(sl, "|")), nil
+}
+
+// // UnmarshalText to convert from text (yang value) to LSP flag.
+// func (lf *LSPFlags) UnmarshalText(text []byte) error {
+// 	switch string(text) {
+// 	case "level-1":
+// 		*lf = 0x1
+// 	case "level-2":
+// 		*lf = 0x2
+// 	case "level-all":
+// 		*lf = 0x3
+// 	default:
+// 		return fmt.Errorf("Invalid level string for unmarshal %s", text)
+// 	}
+// 	return nil
+// }
 
 // MakeLSPFlags returns a byte for header insertion.
 func MakeLSPFlags(flags LSPFlags, istype LevelFlag) uint8 {
@@ -304,7 +344,7 @@ var PSNPTypeMap = [2]PDUType{PDUTypePSNPL1, PDUTypePSNPL2}
 func (typ PDUType) String() string {
 	// XXX add nice map with strings
 	if desc, ok := PDUTypeDesc[typ]; ok {
-		return fmt.Sprintf("%s", desc)
+		return desc
 	} else {
 		return fmt.Sprintf("%d", typ)
 	}
@@ -506,6 +546,24 @@ func MakeLSPID(sysid SystemID, pnid, segid uint8) LSPID {
 
 func (l LSPID) String() string {
 	return ISOString(l[:LSPIDLen], true)
+}
+
+// MarshalText converts an LSPID to text representation.
+func (l LSPID) MarshalText() ([]byte, error) {
+	return []byte(l.String()), nil
+}
+
+// UnmarshalText converts a text rep of an LSPID to an LSPID
+func (l *LSPID) UnmarshalText(text []byte) error {
+	lspid, err := ISOEncode(string(text))
+	if err != nil {
+		return err
+	}
+	if len(lspid) != LSPIDLen {
+		return fmt.Errorf("Wrong length for LSPID %d", len(lspid))
+	}
+	copy((*l)[:], lspid)
+	return nil
 }
 
 // LSPIDString prints a LSPID given a generic byte slice.

@@ -51,9 +51,9 @@ func (lsp *lspSegment) cksum() uint16 {
 	return pkt.GetUInt16(lsp.hdr[clns.HdrLSPCksum:])
 }
 
-// func (lsp *lspSegment) getFlags() clns.LSPFlags {
-// 	return clns.LSPFlags(lsp.hdr[clns.HdrLSPFlags])
-// }
+func (lsp *lspSegment) flags() clns.LSPFlags {
+	return clns.LSPFlags(lsp.hdr[clns.HdrLSPFlags] & clns.LSPFlagMask)
+}
 
 // get the lsp segment with the given LSPID or nil if not present.
 func (db *DB) get(lspid []byte) *lspSegment {
@@ -492,7 +492,9 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.Map)
 		copy(elspid[:], e[tlv.SNPEntLSPID:])
 
 		lsp := db.get(elspid[:])
-		mentioned.Insert(elspid[:], true)
+		if complete {
+			mentioned.Insert(elspid[:], true)
+		}
 
 		// 7.3.15.2: b1
 		result := compareLSP(lsp, e)

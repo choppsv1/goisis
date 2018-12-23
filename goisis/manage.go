@@ -25,27 +25,40 @@ type IFList struct {
 	Ifs []*YangInterface `json:"interface,omitempty"`
 }
 
+// IFList is a yang list of interfaces
+type LSPList struct {
+	Lsp []*update.YangLSP `json:"lsp,omitempty"`
+}
+
 // YangRoot is the root of the yang module.
 type YangRoot struct {
 	Enable    bool           `json:"enable"`
 	LevelType clns.LevelFlag `json:"level-type"`
 	SystemID  clns.SystemID  `json:"system-id"`
 	//...
-	Interfaces IFList `json:"interfaces,omitempty"`
+	Interfaces IFList  `json:"interfaces,omitempty"`
+	DB         LSPList `json:"db,omitempty"`
 }
 
 func errToHTTP(w http.ResponseWriter, err error) {
 	http.Error(w, err.Error(), http.StatusInternalServerError)
 }
 
-func muxRoot(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
+func muxRoot(w http.ResponseWriter, r *http.Request, cdb *CircuitDB, updb [2]*update.DB) {
 	w.WriteHeader(http.StatusOK)
+
+	lsplist, err := dbData(w, GlbISType, "", updb)
+	if err != nil {
+		errToHTTP(w, err)
+		return
+	}
 
 	root := YangRoot{
 		Enable:     true,
 		LevelType:  GlbISType,
 		SystemID:   GlbSystemID,
 		Interfaces: IFList{interfaceData(w, "", cdb)},
+		DB:         LSPList{lsplist},
 	}
 
 	jvars, err := json.Marshal(root)
@@ -245,20 +258,75 @@ func muxIntfs(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
 	}
 }
 
+func dbData(w http.ResponseWriter, lf clns.LevelFlag, lspid string, updb [2]*update.DB) ([]*update.YangLSP, error) {
+	var alldata []*update.YangLSP
+	for l := clns.Level(1); l <= clns.Level(2); l++ {
+		if !lf.IsLevelEnabled(l) {
+			continue
+		}
+		db := updb[l.ToIndex()]
+		if db == nil {
+			continue
+		}
+
+		dbdata, err := db.YangData(lspid)
+		if err != nil {
+			return nil, err
+		}
+		alldata = append(alldata, dbdata...)
+	}
+	return alldata, nil
+}
+
+func muxDB(w http.ResponseWriter, r *http.Request, updb [2]*update.DB) {
+	w.WriteHeader(http.StatusOK)
+	vars := mux.Vars(r)
+
+	var lf clns.LevelFlag
+	if vars["level"] == "" {
+		lf = clns.L1Flag | clns.L2Flag
+	} else if err := (&lf).UnmarshalText([]byte(vars["level"])); err != nil {
+		errToHTTP(w, err)
+		return
+	}
+
+	dbdata, err := dbData(w, lf, vars["lspid"], updb)
+	if err != nil {
+		errToHTTP(w, err)
+		return
+	}
+
+	jvars, err := json.Marshal(dbdata)
+	if err != nil {
+		errToHTTP(w, err)
+		return
+	}
+
+	_, err = io.WriteString(w, string(jvars))
+	if err != nil {
+		errToHTTP(w, err)
+	}
+}
+
 // SetupManagement initializes the management interface.
 func SetupManagement(cdb *CircuitDB, updb [2]*update.DB) error {
 	rootF := func(w http.ResponseWriter, r *http.Request) {
-		muxRoot(w, r, cdb)
+		muxRoot(w, r, cdb, updb)
 	}
 	intfF := func(w http.ResponseWriter, r *http.Request) {
 		muxIntfs(w, r, cdb)
+	}
+	updF := func(w http.ResponseWriter, r *http.Request) {
+		muxDB(w, r, updb)
 	}
 	r := mux.NewRouter()
 	r.HandleFunc("/isis", rootF)
 	r.HandleFunc("/isis/interfaces", intfF)
 	r.HandleFunc("/isis/interfaces/interface", intfF)
 	r.HandleFunc("/isis/interfaces/interface={name}", intfF)
-	// r.HandleFunc("/system-id")
+	r.HandleFunc("/isis/db", updF)
+	r.HandleFunc("/isis/db={level}", updF)
+	r.HandleFunc("/isis/db={level}/{lspid}", updF)
 
 	return http.ListenAndServe("localhost:8080", r)
 }

@@ -61,6 +61,7 @@ type DB struct {
 	dis       map[uint8]disInfo
 	disCount  uint
 	disTimer  *time.Timer
+	rpC       chan RPC
 	chgCC     chan chgCircuit
 	chgDISC   chan chgDIS
 	chgLSPC   chan chgLSP
@@ -183,6 +184,7 @@ func NewDB(sysid clns.SystemID, istype clns.LevelFlag, l clns.Level, areas [][]b
 		csnpTickC: make(chan bool, 10),
 		dataC:     make(chan interface{}, 10),
 		pduC:      make(chan inputPDU, 10),
+		rpC:       make(chan RPC, 10),
 	}
 
 	if h, err := os.Hostname(); err != nil {
@@ -202,6 +204,25 @@ func NewDB(sysid clns.SystemID, istype clns.LevelFlag, l clns.Level, areas [][]b
 // ============
 // External API
 // ============
+
+// RPC is passed on a channel to invoke the function and return a result on a channel
+type RPC struct {
+	F      func() interface{}
+	Result chan interface{}
+}
+
+// DoRPC arranges for a function to be called within another go routine using a channel.
+func DoRPC(C chan<- RPC, F func() interface{}) (interface{}, error) {
+	rpc := RPC{F, make(chan interface{})}
+	C <- rpc
+	result := <-rpc.Result
+	switch v := result.(type) {
+	case error:
+		return nil, v
+	default:
+		return v, nil
+	}
+}
 
 // Slicer grabs a slice from a byte slice given a start and length.
 func Slicer(b []byte, start int, length int) []byte {
@@ -326,6 +347,62 @@ func (db *DB) CopyLSPSNP(lspid *clns.LSPID, ent []byte) bool {
 	found := <-result
 	close(result)
 	return found
+}
+
+type YangLSP struct {
+	Lspid    clns.LSPID    `json:"lspid"`
+	Seqno    uint32        `json:"seqno"`
+	Lifetime uint16        `json:"lifetime"`
+	Cksum    uint16        `json:"cksum"`
+	Flags    clns.LSPFlags `json:"flags"`
+	// TLVs
+}
+
+func (lsp *lspSegment) yangData() *YangLSP {
+	yd := &YangLSP{
+		Lspid:    lsp.lspid,
+		Seqno:    lsp.seqNo(),
+		Lifetime: lsp.checkLifetime(),
+		Cksum:    lsp.cksum(),
+		Flags:    lsp.flags(),
+	}
+	return yd
+}
+
+// Called from the update go routine.
+func (db *DB) yangData(l *clns.LSPID) interface{} {
+	var dbdata []*YangLSP
+	if l != nil {
+		lsp := db.get((*l)[:])
+		if lsp == nil {
+			return fmt.Errorf("Unknown LSP with ID %s", *l)
+		}
+		return append(dbdata, lsp.yangData())
+	}
+	for it := db.db.Iterator(); it.HasNext(); {
+		node, _ := it.Next()
+		lsp := node.Value().(*lspSegment)
+		dbdata = append(dbdata, lsp.yangData())
+	}
+	return dbdata
+}
+
+// YangData arranges for the LSP date to be returned.
+func (db *DB) YangData(idstr string) ([]*YangLSP, error) {
+	var lspid clns.LSPID
+	var lspidp *clns.LSPID
+	if idstr != "" {
+		lspidp = &lspid
+		err := lspidp.UnmarshalText([]byte(idstr))
+		if err != nil {
+			return nil, err
+		}
+	}
+	i, err := DoRPC(db.rpC, func() interface{} { return db.yangData(lspidp) })
+	if err != nil {
+		return nil, err
+	}
+	return i.([]*YangLSP), nil
 }
 
 // ===========================================================
@@ -655,6 +732,8 @@ func (db *DB) run() {
 			db.handleDataC(in)
 		case in := <-db.chgCC:
 			db.handleChgCircuit(in)
+		case in := <-db.rpC:
+			in.Result <- in.F()
 		}
 	}
 }
