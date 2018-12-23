@@ -50,6 +50,7 @@ type Circuit interface {
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	RecvHello(pdu *RecvPDU)
 	Send([]byte, clns.LIndex)
+	YangData() *YangInterface
 }
 
 // -----

@@ -1,7 +1,16 @@
-version: "2.1"
+version: '2.2'
+
+services:
+   frr:
+      build:
+         context: https://github.com/frrouting/frr.git
+         dockerfile: docker/alpine/Dockerfile
 
 services:
   isis50:
+    # build:
+    #   context: https://github.com/frrouting/frr.git
+    #   dockerfile: docker/alpine/Dockerfile
     image: choppsv1/isisd
     cap_add: [ "NET_ADMIN", "NET_RAW", "SYS_ADMIN" ]
     sysctls: [ "net.ipv6.conf.all.forwarding=1" ]
@@ -9,6 +18,9 @@ services:
       net15:
         ipv4_address: 192.168.15.50
   isis60:
+    # build:
+    #   context: https://github.com/frrouting/frr.git
+    #   dockerfile: docker/alpine/Dockerfile
     image: choppsv1/isisd
     cap_add: [ "NET_ADMIN", "NET_RAW", "SYS_ADMIN" ]
     sysctls: [ "net.ipv6.conf.all.forwarding=1" ]
@@ -16,6 +28,9 @@ services:
       net16:
         ipv4_address: 192.168.16.60
   isis70:
+    # build:
+    #   context: https://github.com/frrouting/frr.git
+    #   dockerfile: docker/alpine/Dockerfile
     image: choppsv1/isisd
     cap_add: [ "NET_ADMIN", "NET_RAW", "SYS_ADMIN" ]
     sysctls: [ "net.ipv6.conf.all.forwarding=1" ]

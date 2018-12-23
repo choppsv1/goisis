@@ -140,7 +140,7 @@ func main() {
 		}
 	}
 
-	SetupManagement()
+	SetupManagement(cdb, updb)
 
 	ticker := time.NewTicker(time.Second * 120)
 	for _ = range ticker.C {

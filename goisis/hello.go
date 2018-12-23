@@ -37,9 +37,15 @@ const (
 )
 
 var stateStrings = map[AdjState]string{
-	AdjStateDown: "AdjStateUp",
+	AdjStateDown: "AdjStateDown",
 	AdjStateInit: "AdjStateInit",
 	AdjStateUp:   "AdjStateUp",
+}
+
+var marshalStrings = map[AdjState]string{
+	AdjStateDown: "down",
+	AdjStateInit: "init",
+	AdjStateUp:   "up",
 }
 
 func (s AdjState) String() string {
@@ -50,17 +56,26 @@ func (s AdjState) String() string {
 	return ss
 }
 
+func (s AdjState) MarshalText() ([]byte, error) {
+	ss, ok := marshalStrings[s]
+	if !ok {
+		return nil, fmt.Errorf("Bogus Adjacency State value %d", s)
+	}
+	return []byte(ss), nil
+}
+
 //
 // Adj represents an IS-IS adjacency
 //
 type Adj struct {
 	// Immutable.
 	link  Link
-	lf    clns.LevelFlag
+	usage clns.LevelFlag
 	sysid clns.SystemID
 	snpa  clns.SNPA
 
 	// Mutable.
+	ctype     clns.LevelFlag
 	state     AdjState
 	areas     [][]byte
 	holdTimer *time.Timer
@@ -273,7 +288,7 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 	rundis := false
 	iihp := pdu.payload[clns.HdrCLNSSize:]
 
-	if a.lf.IsLevelEnabled(1) {
+	if a.usage.IsLevelEnabled(1) {
 		// Update Areas
 		areas, err := pdu.tlvs[tlv.TypeAreaAddrs][0].AreaAddrsValue()
 		if err != nil {
@@ -411,7 +426,8 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 	if !ok {
 		a = &Adj{
 			link:  pdu.link,
-			lf:    pdu.l.ToFlag(),
+			ctype: clns.LevelFlag(pdu.payload[clns.HdrCLNSSize+clns.HdrIIHCircType] & 0x3),
+			usage: pdu.l.ToFlag(),
 			sysid: clns.GetSrcID(pdu.payload),
 			snpa:  clns.HWToSNPA(pdu.src),
 		}

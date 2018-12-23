@@ -417,6 +417,21 @@ func (s SNPA) String() string {
 	return net.HardwareAddr(s[:]).String()
 }
 
+// MarshalText to convert SNPA to text encoding (yang value)
+func (s SNPA) MarshalText() ([]byte, error) {
+	return []byte(net.HardwareAddr(s[:]).String()), nil
+}
+
+// UnmarshalText to convert yang value to SNPA
+func (s *SNPA) UnmarshalText(text []byte) error {
+	hw, err := net.ParseMAC(string(s[:]))
+	if err != nil {
+		return err
+	}
+	*s = HWToSNPA(hw)
+	return nil
+}
+
 func HWToSNPA(h net.HardwareAddr) (snpa SNPA) {
 	copy(snpa[:], h)
 	return

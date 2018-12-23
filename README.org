@@ -37,7 +37,7 @@ point-to-point Circuit there will be only a single Link.
 - Gorilla Mux for serving up state ("github.com/gorilla/mux")
 
 ** Implementation notes
-- Modern only; no legacy narrow metrics, no clns/clnp routing.
+- Modern only; no legacy {narrow metrics, 2-way p2p, clns/clnp routing}.
 - Supported RFCs of note
   - RFC5301 Dyanmic Hostname
   - RFC5305 Extended Reachability
