@@ -135,6 +135,8 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs tlv.Map) {
 			Debug(DbgFUpd, "%s: Received Purge LSP %s", db, lsp)
 			lsp.zeroLife = xtime.NewHoldTimer(clns.ZeroMaxAge,
 				func() { db.expireC <- lsp.lspid })
+			// Optional add Purge TLV if missing, need adjacency
+			// received on for that.
 		} else if lsp.zeroLife.Until() < clns.ZeroMaxAge {
 			// Refresh zero age. If we can't reset the timer b/c
 			// it's fired/firing just create a new one. We handle it.
