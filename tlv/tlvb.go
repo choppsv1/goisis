@@ -7,7 +7,7 @@ package tlv
 import (
 	"encoding/base64"
 	"encoding/binary"
-	// "encoding/json"
+	"encoding/json"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"net"
@@ -172,10 +172,9 @@ func (b Data) newFixedValues(alen int, atyp interface{}) error {
 	aval.Elem().Set(addrs)
 
 	// Fill the input slice up.
-	for aidx := 0; aidx < count; aidx++ {
-		addrs.Index(aidx).Set(reflect.ValueOf(v[aidx : aidx+alen]))
+	for aidx, i := 0, 0; i < count; i++ {
+		addrs.Index(i).Set(reflect.ValueOf(v[aidx : aidx+alen]))
 		aidx += alen
-
 	}
 	return nil
 }
@@ -239,7 +238,27 @@ func (tlvs Map) MarshalJSON() ([]byte, error) {
 			sb.WriteString("{ ")
 		}
 		fmt.Fprintf(&sb, `"type": "%d", "name": "%s", "values": [ `, k, k)
+
 		switch k {
+		// case TypeExtIsReach:
+		case TypeIPv4IntfAddrs, TypeIPv6IntfAddrs:
+			for _, tlv := range tlvs[k] {
+				var addrs []net.IP
+				var err error
+				if k == TypeIPv4IntfAddrs {
+					addrs, err = tlv.IntfIPv4AddrsValue()
+				} else {
+					addrs, err = tlv.IntfIPv6AddrsValue()
+				}
+				if err != nil {
+					return nil, err
+				}
+				v, err := json.Marshal(addrs)
+				if err != nil {
+					return nil, err
+				}
+				fmt.Fprintf(&sb, "%s", v)
+			}
 		default:
 			// Generic dump
 			first := true
