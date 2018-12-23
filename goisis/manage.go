@@ -7,13 +7,18 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
 	"github.com/gorilla/mux"
 	"io"
 	"net/http"
 )
+
+// Generic data request for requesting data over channels
+type YangDataReq struct {
+	key    interface{}
+	result chan interface{}
+}
 
 // IFList is a yang list of interfaces
 type IFList struct {
@@ -40,7 +45,7 @@ func muxRoot(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
 		Enable:     true,
 		LevelType:  GlbISType,
 		SystemID:   GlbSystemID,
-		Interfaces: IFList{interfaceData(w, nil, cdb)},
+		Interfaces: IFList{interfaceData(w, "", cdb)},
 	}
 
 	jvars, err := json.Marshal(root)
@@ -89,30 +94,6 @@ func muxRoot(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
 //              |        +--:(password)
 //              |           +--rw key?                string
 //              |           +--rw crypto-algorithm?   identityref
-//              +--rw hello-interval
-//              |  +--rw value?     rt-types:timer-value-seconds16
-//              |  +--rw level-1
-//              |  |  +--rw value?   rt-types:timer-value-seconds16
-//              |  +--rw level-2
-//              |     +--rw value?   rt-types:timer-value-seconds16
-//              +--rw hello-multiplier
-//              |  +--rw value?     uint16
-//              |  +--rw level-1
-//              |  |  +--rw value?   uint16
-//              |  +--rw level-2
-//              |     +--rw value?   uint16
-//              +--rw priority
-//              |  +--rw value?     uint8
-//              |  +--rw level-1
-//              |  |  +--rw value?   uint8
-//              |  +--rw level-2
-//              |     +--rw value?   uint8
-//              +--rw metric
-//              |  +--rw value?     wide-metric
-//              |  +--rw level-1
-//              |  |  +--rw value?   wide-metric
-//              |  +--rw level-2
-//              |     +--rw value?   wide-metric
 //              +--rw bfd {bfd}?
 //              |  +--rw enable?                           boolean
 //              |  +--rw local-multiplier?                 multiplier
@@ -202,34 +183,23 @@ func muxRoot(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
 
 // YangAdj is the adjacency data for the yang model
 type YangAdj struct {
-	Istype clns.LevelFlag `json:"neighbor-sys-type"` //level
-	Sysid  clns.SystemID  `json:"neighbor-sysid"`    //system-id
-	// ExtCID   uint8          `json:"neighbor-extended-circuit-id"` // extended-circuit-id
-	Snpa     clns.SNPA      `json:"neighbor-snpa"`     //                  snpa
-	State    AdjState       `json:"state"`             //                          adj-state-type
-	Priority uint8          `json:"neighbor-priority"` //              uint8
-	Usage    clns.LevelFlag `json:"usage"`             //                          level
-	//`json:"hold-timer"` // rt-types:timer-value-seconds16
-	// `json:"lastuptime"` //                     yang:timestamp
+	Istype     clns.LevelFlag `json:"neighbor-sys-type"`
+	Sysid      clns.SystemID  `json:"neighbor-sysid"`
+	Snpa       clns.SNPA      `json:"neighbor-snpa,omitempty"`
+	State      AdjState       `json:"state"`
+	Priority   uint8          `json:"neighbor-priority"`
+	Usage      clns.LevelFlag `json:"usage"`
+	HoldTime   uint16         `json:"hold-timer"`
+	ExtCID     uint32         `json:"neighbor-extended-circuit-id,omitempty"`
+	LastUpTime uint32         `json:"lastuptime"`
 }
 
-// YangData returns the yang data for an adjacency
-func (a *Adj) YangData() *YangAdj {
-	yd := &YangAdj{
-		Istype:   a.ctype,
-		Sysid:    a.sysid,
-		Snpa:     a.snpa,
-		State:    a.state,
-		Priority: a.priority,
-		Usage:    a.usage,
-	}
-	return yd
-}
-
+// Value is a level specific value.
 type Value struct {
 	Value uint `json:"value,omitempty"`
 }
 
+// LevValue is yang data pattern for level specific values in yang model.
 type LevValue struct {
 	*Value
 	Level1 *Value `json:"level-1,omitempty"`
@@ -249,50 +219,11 @@ type YangInterface struct {
 	} `json:"adjcencies"`
 }
 
-// YangData returns the yang data for an interface
-func (c *CircuitLAN) YangData() *YangInterface {
-	yd := &YangInterface{
-		Name:      c.intf.Name,
-		LevelType: c.lf,
-		// HelloInt: {
-		// 	Value:
-		// }
-	}
-	for _, levlink := range c.levlink {
-		if levlink == nil {
-			continue
-		}
-		if levlink.l == 1 {
-			yd.HelloInt.Level1 = &Value{Value: levlink.helloInt}
-			yd.HelloMult.Level1 = &Value{Value: levlink.holdMult}
-			yd.Priority.Level1 = &Value{Value: uint(levlink.priority)}
-			yd.Metric.Level1 = &Value{Value: uint(levlink.metric)}
-		} else {
-			yd.HelloInt.Level2 = &Value{Value: levlink.helloInt}
-			yd.HelloMult.Level2 = &Value{Value: levlink.holdMult}
-			yd.Priority.Level2 = &Value{Value: uint(levlink.priority)}
-			yd.Metric.Level2 = &Value{Value: uint(levlink.metric)}
-		}
-		for _, a := range levlink.srcidMap {
-			yd.Adjcencies.Adj = append(yd.Adjcencies.Adj, a.YangData())
-		}
-	}
-	return yd
-}
-
-func interfaceData(w http.ResponseWriter, name *string, cdb *CircuitDB) []*YangInterface {
-	var ifdata []*YangInterface
-	if name != nil {
-		c, ok := cdb.circuits[*name]
-		if !ok {
-			errToHTTP(w, fmt.Errorf("No interface named %s", *name))
-			return nil
-		}
-		ifdata = append(ifdata, c.YangData())
-	} else {
-		for _, c := range cdb.circuits {
-			ifdata = append(ifdata, c.YangData())
-		}
+func interfaceData(w http.ResponseWriter, name string, cdb *CircuitDB) []*YangInterface {
+	ifdata, err := cdb.YangData(name)
+	if err != nil {
+		errToHTTP(w, err)
+		return nil
 	}
 	return ifdata
 }
@@ -301,13 +232,7 @@ func muxIntfs(w http.ResponseWriter, r *http.Request, cdb *CircuitDB) {
 	w.WriteHeader(http.StatusOK)
 	vars := mux.Vars(r)
 
-	var ifdata []*YangInterface
-	name, ok := vars["name"]
-	if !ok {
-		ifdata = interfaceData(w, &name, cdb)
-	} else {
-		ifdata = interfaceData(w, nil, cdb)
-	}
+	ifdata := interfaceData(w, vars["name"], cdb)
 	jvars, err := json.Marshal(ifdata)
 	if err != nil {
 		errToHTTP(w, err)

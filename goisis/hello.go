@@ -13,6 +13,7 @@ import (
 	"github.com/choppsv1/goisis/clns"
 	. "github.com/choppsv1/goisis/logging" // nolint
 	"github.com/choppsv1/goisis/pkt"
+	xtime "github.com/choppsv1/goisis/time"
 	"github.com/choppsv1/goisis/tlv"
 	"net"
 	"time"
@@ -75,10 +76,11 @@ type Adj struct {
 	snpa  clns.SNPA
 
 	// Mutable.
-	ctype     clns.LevelFlag
-	state     AdjState
-	areas     [][]byte
-	holdTimer *time.Timer
+	ctype      clns.LevelFlag
+	state      AdjState
+	areas      [][]byte
+	holdTimer  *xtime.HoldTimer
+	lastUpTime time.Time
 
 	// LAN state
 	lanID    clns.NodeID
@@ -149,6 +151,8 @@ func helloProcess(link *LinkLAN, quit <-chan bool) {
 			if err := sendLANHello(link); err != nil {
 				Trap("%s: error sending LAN hello: %s", link, err)
 			}
+		case in := <-link.rpC:
+			in.Result <- in.F()
 		}
 
 		if rundis {
@@ -185,6 +189,40 @@ func (link *LinkLAN) getAdjacencies(in getAdj) {
 		in.c <- adj
 	}
 	in.c <- tlv.Done{}
+}
+
+// yangData returns the yang data for an adjacency
+func (a *Adj) yangData() *YangAdj {
+	yd := &YangAdj{
+		Istype:   a.ctype,
+		HoldTime: a.holdTimer.Until(),
+		Sysid:    a.sysid,
+		Snpa:     a.snpa,
+		State:    a.state,
+		Priority: a.priority,
+		Usage:    a.usage,
+	}
+	yd.LastUpTime = uint32(a.lastUpTime.Sub(GlbStartTime) / (time.Second / time.Duration(100)))
+	return yd
+}
+
+// yangData returns level specific interface yang data
+func (link *LinkLAN) yangData(yd *YangInterface) error {
+	if link.l == 1 {
+		yd.HelloInt.Level1 = &Value{Value: link.helloInt}
+		yd.HelloMult.Level1 = &Value{Value: link.holdMult}
+		yd.Priority.Level1 = &Value{Value: uint(link.priority)}
+		yd.Metric.Level1 = &Value{Value: uint(link.metric)}
+	} else {
+		yd.HelloInt.Level2 = &Value{Value: link.helloInt}
+		yd.HelloMult.Level2 = &Value{Value: link.holdMult}
+		yd.Priority.Level2 = &Value{Value: uint(link.priority)}
+		yd.Metric.Level2 = &Value{Value: uint(link.metric)}
+	}
+	for _, a := range link.srcidMap {
+		yd.Adjcencies.Adj = append(yd.Adjcencies.Adj, a.yangData())
+	}
+	return nil
 }
 
 // hasUpAdj returns true if the DB contains any Up adjacencies
@@ -338,6 +376,7 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 
 	if a.state != oldstate {
 		if a.state == AdjStateUp {
+			a.lastUpTime = time.Now()
 			rundis = true
 			Trap("TRAP: AdjacencyStateChange: Up: %s", a)
 		} else if oldstate == AdjStateUp {
@@ -350,13 +389,12 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 	// Restart the hold timer.
 	holdtime := pkt.GetUInt16(iihp[clns.HdrIIHHoldTime:])
 	if a.holdTimer == nil {
-		a.holdTimer = time.AfterFunc(time.Second*time.Duration(holdtime),
-			func() {
-				sysid := a.sysid
-				a.link.ExpireAdj(sysid)
-			})
+		a.holdTimer = xtime.NewHoldTimer(holdtime, func() {
+			sysid := a.sysid
+			a.link.ExpireAdj(sysid)
+		})
 	} else {
-		a.holdTimer.Reset(time.Second * time.Duration(holdtime))
+		a.holdTimer.Reset(holdtime)
 	}
 
 	Debug(DbgFAdj, "%s: Updated adjacency %s for SNPA %s from %s to %s rundis %v",

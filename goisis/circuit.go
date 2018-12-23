@@ -50,7 +50,7 @@ type Circuit interface {
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	RecvHello(pdu *RecvPDU)
 	Send([]byte, clns.LIndex)
-	YangData() *YangInterface
+	YangData() (*YangInterface, error)
 }
 
 // -----
@@ -74,45 +74,6 @@ type RecvPDU struct {
 	link Link
 	src  net.HardwareAddr
 	dst  net.HardwareAddr
-}
-
-// NewCircuitDB allocate and initialize a new circuit database.
-func NewCircuitDB() *CircuitDB {
-	cdb := &CircuitDB{
-		circuits: make(map[string]Circuit),
-	}
-
-	// go cdb.processChgFlags()
-
-	return cdb
-}
-
-//
-// CircuitDB is a database of circuits we run on.
-//
-type CircuitDB struct {
-	circuits map[string]Circuit
-}
-
-// NewCircuit creates a circuit enabled for the given levels.
-func (cdb *CircuitDB) NewCircuit(ifname string, lf clns.LevelFlag, updb [2]*update.DB) (*CircuitLAN, error) {
-	ifname, err := resolveIfname(ifname)
-	if err != nil {
-		return nil, err
-	}
-	cb, err := NewCircuitBase(ifname,
-		lf,
-		cdb,
-		updb,
-		GlbQuit)
-	if err != nil {
-		return nil, err
-	}
-	// Check interface type and allocate LAN or P2P
-	cll, err := NewCircuitLAN(cb, lf)
-	cdb.circuits[ifname] = cll
-
-	return cll, err
 }
 
 //
@@ -411,6 +372,25 @@ func (c *CircuitLAN) IPReach(ipv4 bool, C chan<- interface{}, li clns.LIndex) {
 		}
 		C <- tlv.Done{}
 	}()
+}
+
+// YangData returns the yang data for this circuit, it is called within the
+// circuit DB go routine.
+func (c *CircuitLAN) YangData() (*YangInterface, error) {
+	yd := &YangInterface{
+		Name:      c.intf.Name,
+		LevelType: c.lf,
+	}
+	for _, levlink := range c.levlink {
+		if levlink == nil {
+			continue
+		}
+		_, err := DoRPC(levlink.rpC, func() interface{} { return levlink.yangData(yd) })
+		if err != nil {
+			return nil, err
+		}
+	}
+	return yd, nil
 }
 
 // nolint: gocyclo
