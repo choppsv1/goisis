@@ -240,8 +240,32 @@ func (tlvs Map) MarshalJSON() ([]byte, error) {
 		fmt.Fprintf(&sb, `"type": "%d", "name": "%s", "values": [ `, k, k)
 
 		switch k {
+		case TypeAreaAddrs:
+			first := true
+			for _, tlv := range tlvs[k] {
+				addrs, err := tlv.AreaAddrsValue()
+				fmt.Printf("XXXXXXXX %s\n", addrs)
+				if err != nil {
+					fmt.Printf("XXXXXXXX %s\n", err)
+					return nil, err
+				}
+				v, err := json.Marshal(addrs)
+				if err != nil {
+					fmt.Printf("XXXYYYXX %s\n", err)
+					return nil, err
+				}
+				fmt.Printf("XXXXX %s\n", v)
+				if first {
+					first = false
+					fmt.Fprintf(&sb, "%s", v)
+				} else {
+					fmt.Fprintf(&sb, ", %s", v)
+				}
+			}
 		// case TypeExtIsReach:
+		// case TypeISNeighbors:
 		case TypeIPv4IntfAddrs, TypeIPv6IntfAddrs:
+			first := true
 			for _, tlv := range tlvs[k] {
 				var addrs []net.IP
 				var err error
@@ -258,19 +282,24 @@ func (tlvs Map) MarshalJSON() ([]byte, error) {
 					return nil, err
 				}
 				fmt.Fprintf(&sb, "%s", v)
+				if first {
+					first = false
+					fmt.Fprintf(&sb, "%s", v)
+				} else {
+					fmt.Fprintf(&sb, ", %s", v)
+				}
 			}
 		default:
 			// Generic dump
 			first := true
-			var tlv []byte
-			for _, tlv = range tlvs[k] {
+			for _, tlv := range tlvs[k] {
 				// Need to cast back to get normal behavior
 				v := base64.StdEncoding.EncodeToString(tlv)
 				if first {
 					first = false
 					fmt.Fprintf(&sb, "\"%s\"", v)
 				} else {
-					fmt.Fprintf(&sb, ", %s", v)
+					fmt.Fprintf(&sb, ", \"%s\"", v)
 				}
 			}
 		}
@@ -301,24 +330,26 @@ func (b Data) ISNeighborsValue() ([]SystemID, error) {
 }
 
 // AreaAddrsValue returns an array of address found in the TLV.
-func (b Data) AreaAddrsValue() ([][]byte, error) {
-	var addrs [][]byte
-
-	typ := Type(b[0])
-	if typ != TypeAreaAddrs {
+func (b Data) AreaAddrsValue() ([]clns.Area, error) {
+	t, _, v, err := GetTLV(b)
+	if err != nil {
+		return nil, err
+	}
+	if t != int(TypeAreaAddrs) {
 		return nil, fmt.Errorf("Incorrect TLV type %s expecting %s", Type(b[0]), TypeAreaAddrs)
 	}
 
-	alen := int(b[1])
-	for valp := b[2 : alen+2]; len(valp) > 0; valp = valp[1+alen:] {
-		alen = int(valp[0])
-		if alen > len(valp[1:]) {
-			return nil, fmt.Errorf("Area address longer (%d) than available space (%d)", alen, len(valp[1:]))
+	var addrs []clns.Area
+	for len(v) > 0 {
+		alen := int(v[0])
+		if alen > len(v[1:]) {
+			return nil, fmt.Errorf("Area address longer (%d) than available space (%d)", alen, len(v[1:]))
 		}
 		if alen == 0 {
 			return nil, fmt.Errorf("Invalid zero-length area address")
 		}
-		addrs = append(addrs, valp[1:1+alen])
+		addrs = append(addrs, v[1:1+alen])
+		v = v[1+alen:]
 	}
 	return addrs, nil
 }

@@ -78,7 +78,7 @@ type Adj struct {
 	// Mutable.
 	ctype      clns.LevelFlag
 	state      AdjState
-	areas      [][]byte
+	areas      []clns.Area
 	holdTimer  *xtime.HoldTimer
 	lastUpTime time.Time
 

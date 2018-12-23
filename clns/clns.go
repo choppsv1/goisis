@@ -586,6 +586,27 @@ func (la LSPIDArray) Swap(i, j int) {
 	la[i], la[j] = la[j], la[i]
 }
 
+type Area []byte
+
+func (a Area) String() string {
+	return ISOString(a, false)
+}
+
+// MarshalText converts an LSPID to text representation.
+func (a Area) MarshalText() ([]byte, error) {
+	return []byte(a.String()), nil
+}
+
+// UnmarshalText converts a text rep of an LSPID to an LSPID
+func (a *Area) UnmarshalText(text []byte) error {
+	area, err := ISOEncode(string(text))
+	if err != nil {
+		return err
+	}
+	*a = area
+	return nil
+}
+
 //
 // ISOString returns a string representation of an ISO address (e.g., system ID
 // or an area address etc), these take the form [xx.]xxxx[.xxxx.xxxx] or
