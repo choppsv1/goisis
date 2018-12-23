@@ -161,20 +161,11 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs tlv.Map) {
 		// called now after update.
 		lsp.zeroLife.Stop()
 		lsp.zeroLife = nil
+		// // XXX testing
+		// lifetime = 10
 		lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
 		Debug(DbgFUpd, "%s: Reset hold timer for Purged %s", db, lsp)
 	}
-
-	// XXX update refresh timer?
-	// if lsp.isOurs {
-	//      // assert(lsp.refreshTimer != nil)
-	//      timeleft := lifetime * 3 / 4
-	//      // assert timeleft
-	//      if !lsp.refreshTimer.Stop() {
-	//              <-lsp.refreshTimer.C
-	//      }
-	//      lsp.refreshTimer.Reset(timeleft)
-	// }
 
 	Debug(DbgFUpd, "%s: Updated %s", db, lsp)
 }
@@ -223,12 +214,21 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	db.setAllFlag(SRM, lsp.lspid, nil)
 
 	// b) Retain only LSP header. XXX we need more space for auth and purge tlv
-	pdulen := uint16(clns.HdrCLNSSize + clns.HdrLSPSize)
+	purgelen := uint16(2 + clns.SysIDLen)
+	pdulen := uint16(clns.HdrCLNSSize+clns.HdrLSPSize) + purgelen
+
 	Debug(DbgFUpd, "Shrinking lsp.payload %d:%d to %d", len(lsp.payload), cap(lsp.payload), pdulen)
+
 	lsp.payload = lsp.payload[:pdulen]
 	Debug(DbgFUpd, "Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
+
+	// Add Purge TLV, RFC6232.
+	purgetlv := lsp.payload[pdulen-purgelen:]
+	purgetlv[0] = byte(tlv.TypePurge)
+	purgetlv[1] = byte(clns.SysIDLen)
+	copy(purgetlv[2:], db.sysid[:])
 
 	// Update the CSNP cache
 	db.cacheUpdate(lsp.hdr)
@@ -331,7 +331,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs tlv.Map) {
 
 	if isOurs && !fromUs {
 		// XXX check all this.
-		pnid := lsp.lspid[7]
+		pnid := lspid[7]
 		var unsupported bool
 		if pnid == 0 {
 			unsupported = false // always support non-pnode LSP

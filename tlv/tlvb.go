@@ -42,35 +42,33 @@ type Type uint8
 
 // ISO 10589:2002
 const (
-	TypeAreaAddrs   Type = 1
-	TypeIsReach     Type = 2
-	TypeISNeighbors Type = 6
+	// ISO
+	TypeAreaAddrs   Type = 1 // ISO10590
+	TypeIsReach     Type = 2 // ISO10590
+	TypeISNeighbors Type = 6 // ISO10590
 
 	//XXX Conflict!
-	TypeIsVneighbors Type = 7
+	TypeIsVneighbors Type = 7 // ISO10590
 	TypeInstanceID   Type = 7
 
-	TypePadding    Type = 8
-	TypeSNPEntries Type = 9
-	TypeAuth       Type = 10
-	TypeLspBufSize Type = 14
+	TypePadding    Type = 8  // ISO10590
+	TypeSNPEntries Type = 9  // ISO10590
+	TypeAuth       Type = 10 // ISO10590
+	TypePurge      Type = 13 // RFC6232
+	TypeLspBufSize Type = 14 // ISO10590
 
-	//RFC5305
-	TypeExtIsReach Type = 22
+	TypeExtIsReach Type = 22 //RFC5305
 
-	//RFC1195
-	TypeIPv4Iprefix   Type = 128
-	TypeNLPID         Type = 129
-	TypeIPv4Eprefix   Type = 130
-	TypeIPv4IntfAddrs Type = 132
-	TypeRouterID      Type = 134
-	TypeExtIPv4Prefix Type = 135
-	TypeHostname      Type = 137
-	TypeIPv6IntfAddrs Type = 232
-	TypeIPv6Prefix    Type = 236
-
-	// RFC7981
-	TypeRouterCap Type = 242
+	TypeIPv4Iprefix   Type = 128 // RFC1195
+	TypeNLPID         Type = 129 // RFC1195
+	TypeIPv4Eprefix   Type = 130 // RFC1195
+	TypeIPv4IntfAddrs Type = 132 // RFC1195
+	TypeRouterID      Type = 134 // RFC1195
+	TypeExtIPv4Prefix Type = 135 // RFC1195
+	TypeHostname      Type = 137 // RFC1195
+	TypeIPv6IntfAddrs Type = 232 // RFC1195
+	TypeIPv6Prefix    Type = 236 // RFC1195
+	TypeRouterCap     Type = 242 // RFC7981
 )
 
 // TypeNameMap returns string names for known TLV types

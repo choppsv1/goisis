@@ -47,19 +47,19 @@ state, the handlers don't implement RESTCONF (I don't think).
 ** Implementation notes
 - Modern only; no legacy {narrow metrics, 2-way p2p, clns/clnp routing}.
 - Some extra functionality (RFCs)
-  - RFC5301 Dyanmic Hostname
-  - RFC5305 Extended Reachability
-  - RFC5308 IPv6 supported
+  - RFC 5301 Dyanmic Hostname
+  - RFC 5305 Extended Reachability
+  - RFC 5308 IPv6 supported
+  - RFC 6232 Purge origination
 ** TODO Missing Items
 *** Immediate need
-- Implement Decision Process (SPF)
 - Implement P2P interfaces (RFC5303 3-way, RFC5309 p2pOverLAN)
-- RFC 6232 - purge origination (easy)
-- RFC 5306 - Restart signaling (neighbor support)
 
 *** Want
-- RFC 5310 - Generic Cryptographic Authentication
 - RFC 5304 - Cryptographic Authentication
+- RFC 5306 Restart signaling (neighbor support)
+- RFC 5310 - Generic Cryptographic Authentication
+- Maybe Implement Decision Process (SPF)
 
 *** Maybe never.
 - RFC 5302 - Domain wide distribution, no route leaking.
