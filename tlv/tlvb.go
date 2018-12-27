@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/choppsv1/goisis/clns"
+	// "golang.org/x/net/idna" for hostname
 	"net"
 	"reflect"
 	"sort"
@@ -24,9 +25,6 @@ import (
 
 // Data is a byte slice that should start with type and len values
 type Data []byte
-
-// NLPID is a ISO network layer process identifier
-type NLPID uint8
 
 // SystemID is a byte address of fixed (6) length
 type SystemID []byte
@@ -43,31 +41,31 @@ type Type uint8
 // ISO 10589:2002
 const (
 	// ISO
-	TypeAreaAddrs   Type = 1 // ISO10590
+	TypeAreaAddrs   Type = 1 // ISO10590 (marshaled)
 	TypeIsReach     Type = 2 // ISO10590
-	TypeISNeighbors Type = 6 // ISO10590
+	TypeISNeighbors Type = 6 // ISO10590 (marshaled)
 
 	//XXX Conflict!
 	TypeIsVneighbors Type = 7 // ISO10590
 	TypeInstanceID   Type = 7
 
-	TypePadding    Type = 8  // ISO10590
-	TypeSNPEntries Type = 9  // ISO10590
+	TypePadding    Type = 8  // ISO10590 (marshaled)
+	TypeSNPEntries Type = 9  // ISO10590 (marshaled)
 	TypeAuth       Type = 10 // ISO10590
-	TypePurge      Type = 13 // RFC6232
-	TypeLspBufSize Type = 14 // ISO10590
+	TypePurge      Type = 13 // RFC6232 (marshaled)
+	TypeLspBufSize Type = 14 // ISO10590 (marshaled)
 
 	TypeExtIsReach Type = 22 //RFC5305
 
 	TypeIPv4Iprefix   Type = 128 // RFC1195
-	TypeNLPID         Type = 129 // RFC1195
+	TypeNLPID         Type = 129 // RFC1195 (marshaled)
 	TypeIPv4Eprefix   Type = 130 // RFC1195
-	TypeIPv4IntfAddrs Type = 132 // RFC1195
-	TypeRouterID      Type = 134 // RFC1195
-	TypeExtIPv4Prefix Type = 135 // RFC1195
-	TypeHostname      Type = 137 // RFC1195
-	TypeIPv6IntfAddrs Type = 232 // RFC1195
-	TypeIPv6Prefix    Type = 236 // RFC1195
+	TypeIPv4IntfAddrs Type = 132 // RFC1195 (marshaled)
+	TypeRouterID      Type = 134 // (marshaled)
+	TypeExtIPv4Prefix Type = 135 //
+	TypeHostname      Type = 137 // RFC5301 (marshaled)
+	TypeIPv6IntfAddrs Type = 232 // RFC5308 (marshaled)
+	TypeIPv6Prefix    Type = 236 // RFC5308
 	TypeRouterCap     Type = 242 // RFC7981
 )
 
@@ -238,6 +236,15 @@ func (b Data) AreaAddrsValue() ([]clns.Area, error) {
 	return addrs, nil
 }
 
+func (b Data) Hostname() (string, error) {
+	_, _, v, err := GetTLV(b)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(v)), nil
+
+}
+
 // RouterIDValue returns the Router ID found in the TLV.
 func (b Data) RouterIDValue() (net.IP, error) {
 	_, l, v, err := GetTLV(b)
@@ -251,8 +258,16 @@ func (b Data) RouterIDValue() (net.IP, error) {
 }
 
 // NLPIDValues returns a slice of NLPID values.
-func (b Data) NLPIDValues(nlpids *[]NLPID) error {
-	return b.newFixedValues(1, nlpids)
+func (b Data) NLPIDValues() ([]clns.NLPID, error) {
+	_, l, v, err := GetTLV(b)
+	if err != nil {
+		return nil, err
+	}
+	nlpids := make([]clns.NLPID, l)
+	for i := 0; i < l; i++ {
+		nlpids[i] = clns.NLPID(v[i])
+	}
+	return nlpids, nil
 }
 
 // LSPBufSizeValue returns the value found in the TLV.
@@ -265,6 +280,28 @@ func (b Data) LSPBufSizeValue() (uint16, error) {
 		return 0, fmt.Errorf("Length of data %d is not 2", l)
 	}
 	return binary.BigEndian.Uint16(v), nil
+}
+
+// Return the systemid count returned in the input args.
+func (b Data) PurgeValues() ([]clns.SystemID, error) {
+	_, l, v, err := GetTLV(b)
+	if err != nil {
+		return nil, err
+	}
+	if l != clns.SysIDLen+1 && l != 2*clns.SysIDLen+1 {
+		return nil, fmt.Errorf("%s length %d not valid", TypePurge, l)
+	}
+	count := int(v[0])
+	v = v[1:]
+	if count < 1 || count > 2 {
+		return nil, fmt.Errorf("%s invalid sysid count %d", TypePurge, count)
+	}
+	addrs := make([]clns.SystemID, 0, 2)
+	for i := 0; i < 0; i++ {
+		copy(addrs[i][:], v)
+		v = v[clns.SysIDLen:]
+	}
+	return addrs, nil
 }
 
 // TypeSNPEntries TLV value offsets
@@ -316,6 +353,119 @@ func (tlvs Map) SNPEntryValues() ([][]byte, error) {
 	return entries, nil
 }
 
+type SNPEntryDecode struct {
+	Lifetime uint16
+	Lspid    clns.LSPID
+	SeqNo    uint32
+	Cksum    uint16
+}
+
+func (tlv Data) decodeSNPEntryValues() ([]SNPEntryDecode, error) {
+	_, l, v, err := GetTLV(tlv)
+	if err != nil {
+		return nil, err
+	}
+	if l%SNPEntSize != 0 {
+		return nil, ErrTLVSpaceCorrupt(
+			fmt.Sprintf("SNP Entries TLV not multiple of %d", SNPEntSize))
+	}
+	count := l / SNPEntSize
+	rv := make([]SNPEntryDecode, count)
+	for i := 0; i < count; i++ {
+		rv[i].Lifetime = binary.BigEndian.Uint16(v[SNPEntLifetime:])
+		copy(rv[i].Lspid[:], v[SNPEntLSPID:])
+		rv[i].SeqNo = binary.BigEndian.Uint32(v[SNPEntSeqNo:])
+		rv[i].Cksum = binary.BigEndian.Uint16(v[SNPEntCksum:])
+		v = v[SNPEntSize:]
+	}
+	return rv, nil
+}
+
+type ISExtReachDecode struct {
+	Metric uint32      `json:"metric"`
+	Nodeid clns.NodeID `json:"nodeid"`
+	Subtlv Data        `json:"subtlv,omitempty"`
+}
+
+func (tlv Data) decodeISExtReachValues() ([]ISExtReachDecode, error) {
+	t, l, v, err := GetTLV(tlv)
+	if err != nil {
+		return nil, err
+	}
+	count := 0
+	for len(v) > 0 {
+		if l < clns.NodeIDLen+3+1 {
+			return nil, fmt.Errorf("short length %d for TLV %s", l, Type(t))
+		}
+		sublen := int(v[clns.NodeIDLen+3])
+		if sublen != 0 {
+			sub := v[clns.NodeIDLen+4:]
+			if len(sub) != sublen {
+				return nil, fmt.Errorf("subtlv length %d not equal to actual len %d", sublen, len(sub))
+			}
+		}
+		nlen := 11 + sublen
+		v = v[nlen:]
+		l = l - nlen
+		count++
+	}
+	// Extract the data
+	_, _, v, _ = GetTLV(tlv)
+	rv := make([]ISExtReachDecode, count)
+	for i := 0; i < count; i++ {
+		rv[i].Metric = uint32(v[7])<<16 + uint32(v[8])<<8 + uint32(v[9])
+		copy(rv[i].Nodeid[:], v)
+		sublen := int(v[clns.NodeIDLen+3])
+		if sublen != 0 {
+			rv[i].Subtlv = make(Data, sublen)
+			copy(rv[i].Subtlv, v[clns.NodeIDLen+4:])
+		}
+		nlen := 11 + sublen
+		v = v[nlen:]
+	}
+	return rv, nil
+}
+
+type IPPrefixDecode struct {
+	Metric uint32
+	Prefix net.IPNet
+	Subtlv Data
+	Updown bool
+}
+
+type IPv6PrefixDecode struct {
+	*IPPrefixDecode
+	External bool
+}
+
+func (tlv Data) decodeIPv4PrefixValues() ([]IPPrefixDecode, error) {
+	// XXX
+	return nil, nil
+}
+
+func (tlv Data) decodeIPv6PrefixValues() ([]IPv6PrefixDecode, error) {
+	// XXX
+	return nil, nil
+}
+
+func marshal(sb *strings.Builder, value interface{}, first *bool, err error) error {
+	// Collect this common code here.
+	if err != nil {
+		return err
+	}
+	v, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	if *first {
+		*first = false
+		fmt.Fprintf(sb, "%s", v)
+	} else {
+		fmt.Fprintf(sb, ", %s", v)
+	}
+	return nil
+}
+
 // MarshalJSON converts a tlv Map into JSON.
 // nolint: gocyclo
 func (tlvs Map) MarshalJSON() ([]byte, error) {
@@ -335,63 +485,62 @@ func (tlvs Map) MarshalJSON() ([]byte, error) {
 
 	firstent := true
 	for _, k := range keys {
-		if !firstent {
-			sb.WriteString(", { ")
-		} else {
-			firstent = false
-			sb.WriteString("{ ")
-		}
-		fmt.Fprintf(&sb, `"type": "%d", "name": "%s", "values": [ `, k, k)
+		for _, tlv := range tlvs[k] {
+			if firstent {
+				firstent = false
+				sb.WriteString("{ ")
+			} else {
+				sb.WriteString(", { ")
+			}
 
-		switch k {
-		case TypeAreaAddrs:
+			fmt.Fprintf(&sb, `"type": %d, "name": "%s", "value": `, k, k)
+
+			var value interface{}
+			var err error
 			first := true
-			for _, tlv := range tlvs[k] {
-				addrs, err := tlv.AreaAddrsValue()
-				if err != nil {
-					return nil, err
-				}
-				v, err := json.Marshal(addrs)
-				if err != nil {
-					return nil, err
-				}
-				if first {
-					first = false
-					fmt.Fprintf(&sb, "%s", v)
-				} else {
-					fmt.Fprintf(&sb, ", %s", v)
-				}
+
+			switch k {
+			case TypeAreaAddrs:
+				value, err = tlv.AreaAddrsValue()
+			case TypeIPv4IntfAddrs:
+				value, err = tlv.IntfIPv4AddrsValue()
+			case TypeIPv6IntfAddrs:
+				value, err = tlv.IntfIPv6AddrsValue()
+			case TypeLspBufSize:
+				value, err = tlv.LSPBufSizeValue()
+			case TypePurge:
+				value, err = tlv.PurgeValues()
+			case TypeNLPID:
+				value, err = tlv.NLPIDValues()
+			case TypeISNeighbors:
+				value, err = tlv.ISNeighborsValue()
+			case TypeHostname:
+				value, err = tlv.Hostname()
+			case TypeRouterID:
+				value, err = tlv.RouterIDValue()
+			case TypeExtIsReach:
+				value, err = tlv.decodeISExtReachValues()
+			case TypeExtIPv4Prefix:
+				value, err = tlv.decodeIPv4PrefixValues()
+			case TypeIPv6Prefix:
+				value, err = tlv.decodeIPv6PrefixValues()
+			case TypeAuth:
+			case TypeInstanceID:
+			// Non-LSP
+			case TypeSNPEntries:
+				value, err = tlv.decodeSNPEntryValues()
+			case TypePadding:
+				value = "<padding>"
+			default:
+				break
 			}
-		// case TypeExtIsReach:
-		// case TypeISNeighbors:
-		case TypeIPv4IntfAddrs, TypeIPv6IntfAddrs:
-			first := true
-			for _, tlv := range tlvs[k] {
-				var addrs []net.IP
-				var err error
-				if k == TypeIPv4IntfAddrs {
-					addrs, err = tlv.IntfIPv4AddrsValue()
-				} else {
-					addrs, err = tlv.IntfIPv6AddrsValue()
-				}
-				if err != nil {
+
+			if value != nil {
+				if err = marshal(&sb, value, &first, err); err != nil {
 					return nil, err
 				}
-				v, err := json.Marshal(addrs)
-				if err != nil {
-					return nil, err
-				}
-				if first {
-					first = false
-					fmt.Fprintf(&sb, "%s", v)
-				} else {
-					fmt.Fprintf(&sb, ", %s", v)
-				}
-			}
-		default:
-			// Generic dump
-			first := true
-			for _, tlv := range tlvs[k] {
+			} else {
+				// Generic dump
 				// Need to cast back to get normal behavior
 				v := base64.StdEncoding.EncodeToString(tlv)
 				if first {
@@ -401,9 +550,9 @@ func (tlvs Map) MarshalJSON() ([]byte, error) {
 					fmt.Fprintf(&sb, ", \"%s\"", v)
 				}
 			}
+			sb.WriteString(" }")
+			fmt.Println(sb.String())
 		}
-		sb.WriteString(" ] }")
-		fmt.Println(sb.String())
 	}
 
 	sb.WriteString("]")

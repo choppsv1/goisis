@@ -193,11 +193,26 @@ const (
 	LSPOrigBufSize = LSPRecvBufSize
 )
 
+// NLPID is a ISO network layer process identifier
+type NLPID byte
+
 // NLPID values
 const (
 	NLPIDIPv4 = 0xcc
 	NLPIDIPv6 = 0x8e
 )
+
+// MarshalText to convert system ID to text encoding (yang value)
+func (nlpid NLPID) MarshalText() ([]byte, error) {
+	switch nlpid {
+	case NLPIDIPv4:
+		return []byte("IPv4"), nil
+	case NLPIDIPv6:
+		return []byte("IPv6"), nil
+	default:
+		return []byte(fmt.Sprint("%d", nlpid)), nil
+	}
+}
 
 // HeaderTemplate are the static values we use in the CLNS header.
 var HeaderTemplate = []uint8{
