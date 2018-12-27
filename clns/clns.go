@@ -545,6 +545,24 @@ func (n NodeID) String() string {
 	return ISOString(n[:], true)
 }
 
+// MarshalText to convert system ID to text encoding (yang value)
+func (n NodeID) MarshalText() ([]byte, error) {
+	return []byte(ISOString(n[:], true)), nil
+}
+
+// UnmarshalText to convert from text (yang value) to SystemID
+func (n *NodeID) UnmarshalText(text []byte) error {
+	b, err := ISOEncode(string(text))
+	if err != nil {
+		return err
+	}
+	if len(b) != NodeIDLen {
+		return fmt.Errorf("Wrong length for Nodeid %d", len(b))
+	}
+	copy((*n)[:], b)
+	return nil
+}
+
 // LSPID identifies an LSP segment for a node in the network graph, it is
 // comprised of a NodeID and a final segment octet to allow for multiple
 // segments to describe an full LSP.

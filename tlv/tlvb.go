@@ -214,7 +214,6 @@ func (b Data) ISNeighborsValue() ([]SystemID, error) {
 func (b Data) AreaAddrsValue() ([]clns.Area, error) {
 	t, _, v, err := GetTLV(b)
 	if err != nil {
-		fmt.Printf("XXX: %s", err)
 		return nil, err
 	}
 	if t != int(TypeAreaAddrs) {
@@ -427,15 +426,15 @@ func (tlv Data) decodeISExtReachValues() ([]ISExtReachDecode, error) {
 }
 
 type IPPrefixDecode struct {
-	Metric uint32
-	Prefix net.IPNet
-	Subtlv Data
-	Updown bool
+	Metric uint32    `json:"metric"`
+	Prefix net.IPNet `json:"ip"`
+	Subtlv Data      `json:"subtlv,omitempty"`
+	Updown bool      `json:"updown"`
 }
 
 type IPv6PrefixDecode struct {
 	*IPPrefixDecode
-	External bool
+	External bool `json:"external"`
 }
 
 func (tlv Data) decodeIPv4PrefixValues() ([]IPPrefixDecode, error) {
