@@ -103,26 +103,6 @@ func (t Type) String() string {
 	return s
 }
 
-// newTLVFunc := map[int]func (Data) () (inteface{}, error)
-//TLV_TYPES = {
-//     TLV_AREA_ADDRS: AreaAddrTLV,
-//     TLV_IS_REACH: ISReachTLV,
-//     TLV_IS_NEIGHBORS: ISNeighborsTLV,
-//     TLV_IS_VNEIGHBORS: ISVNeighborsTLV,
-//     TLV_PADDING: PaddingTLV,
-//     TLV_IPV4_INTF_ADDRS: IPV4IntfAddrsTLV,
-//     TLV_ROUTER_ID: RouterIDTLV,
-//     TLV_NLPID: NLPIDTLV,
-//     TLV_SNP_ENTRIES: SNPEntriesTLV,
-//     TLV_EXT_IS_REACH: ExtISReachTLV,
-//     TLV_IPV4_IPREFIX: IPV4PrefixesTLV,
-//     TLV_IPV4_EPREFIX: IPV4PrefixesTLV,
-//     TLV_EXT_IPV4_PREFIX: ExtIPV4PrefixesTLV,
-//     TLV_HOSTNAME: HostnameTLV,
-//     TLV_IPV6_INTF_ADDRS: IPV6IntfAddrsTLV,
-//     TLV_IPV6_PREFIX: IPV6PrefixesTLV,
-// }
-
 // Type get type of byte based TLV
 func (b Data) Type() (int, error) {
 	if len(b) < 2 {
@@ -214,103 +194,6 @@ func (b Data) ParseTLV() (Map, error) {
 	return tlv, nil
 }
 
-func (tlvs Map) MarshalJSON() ([]byte, error) {
-	// Get sorted list of LSPIDs we have
-	var sb strings.Builder
-	if _, err := sb.WriteString("["); err != nil {
-		return nil, err
-	}
-
-	keys := make([]Type, 0, len(tlvs))
-	for k := range tlvs {
-		keys = append(keys, k)
-	}
-	fmt.Println(keys)
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
-	fmt.Println(keys)
-
-	firstent := true
-	for _, k := range keys {
-		if !firstent {
-			sb.WriteString(", { ")
-		} else {
-			firstent = false
-			sb.WriteString("{ ")
-		}
-		fmt.Fprintf(&sb, `"type": "%d", "name": "%s", "values": [ `, k, k)
-
-		switch k {
-		case TypeAreaAddrs:
-			first := true
-			for _, tlv := range tlvs[k] {
-				addrs, err := tlv.AreaAddrsValue()
-				fmt.Printf("XXXXXXXX %s\n", addrs)
-				if err != nil {
-					fmt.Printf("XXXXXXXX %s\n", err)
-					return nil, err
-				}
-				v, err := json.Marshal(addrs)
-				if err != nil {
-					fmt.Printf("XXXYYYXX %s\n", err)
-					return nil, err
-				}
-				fmt.Printf("XXXXX %s\n", v)
-				if first {
-					first = false
-					fmt.Fprintf(&sb, "%s", v)
-				} else {
-					fmt.Fprintf(&sb, ", %s", v)
-				}
-			}
-		// case TypeExtIsReach:
-		// case TypeISNeighbors:
-		case TypeIPv4IntfAddrs, TypeIPv6IntfAddrs:
-			first := true
-			for _, tlv := range tlvs[k] {
-				var addrs []net.IP
-				var err error
-				if k == TypeIPv4IntfAddrs {
-					addrs, err = tlv.IntfIPv4AddrsValue()
-				} else {
-					addrs, err = tlv.IntfIPv6AddrsValue()
-				}
-				if err != nil {
-					return nil, err
-				}
-				v, err := json.Marshal(addrs)
-				if err != nil {
-					return nil, err
-				}
-				fmt.Fprintf(&sb, "%s", v)
-				if first {
-					first = false
-					fmt.Fprintf(&sb, "%s", v)
-				} else {
-					fmt.Fprintf(&sb, ", %s", v)
-				}
-			}
-		default:
-			// Generic dump
-			first := true
-			for _, tlv := range tlvs[k] {
-				// Need to cast back to get normal behavior
-				v := base64.StdEncoding.EncodeToString(tlv)
-				if first {
-					first = false
-					fmt.Fprintf(&sb, "\"%s\"", v)
-				} else {
-					fmt.Fprintf(&sb, ", \"%s\"", v)
-				}
-			}
-		}
-		sb.WriteString(" ] }")
-		fmt.Println(sb.String())
-	}
-
-	sb.WriteString("]")
-	return []byte(sb.String()), nil
-}
-
 // IntfIPv4AddrsValue returns slice of IPv4 interface addresses.
 func (b Data) IntfIPv4AddrsValue() ([]net.IP, error) {
 	addrs := make([]net.IP, 0, 4)
@@ -333,6 +216,7 @@ func (b Data) ISNeighborsValue() ([]SystemID, error) {
 func (b Data) AreaAddrsValue() ([]clns.Area, error) {
 	t, _, v, err := GetTLV(b)
 	if err != nil {
+		fmt.Printf("XXX: %s", err)
 		return nil, err
 	}
 	if t != int(TypeAreaAddrs) {
@@ -432,6 +316,100 @@ func (tlvs Map) SNPEntryValues() ([][]byte, error) {
 	return entries, nil
 }
 
+// MarshalJSON converts a tlv Map into JSON.
+// nolint: gocyclo
+func (tlvs Map) MarshalJSON() ([]byte, error) {
+	// Get sorted list of LSPIDs we have
+	var sb strings.Builder
+	if _, err := sb.WriteString("["); err != nil {
+		return nil, err
+	}
+
+	keys := make([]Type, 0, len(tlvs))
+	for k := range tlvs {
+		keys = append(keys, k)
+	}
+	fmt.Println(keys)
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	fmt.Println(keys)
+
+	firstent := true
+	for _, k := range keys {
+		if !firstent {
+			sb.WriteString(", { ")
+		} else {
+			firstent = false
+			sb.WriteString("{ ")
+		}
+		fmt.Fprintf(&sb, `"type": "%d", "name": "%s", "values": [ `, k, k)
+
+		switch k {
+		case TypeAreaAddrs:
+			first := true
+			for _, tlv := range tlvs[k] {
+				addrs, err := tlv.AreaAddrsValue()
+				if err != nil {
+					return nil, err
+				}
+				v, err := json.Marshal(addrs)
+				if err != nil {
+					return nil, err
+				}
+				if first {
+					first = false
+					fmt.Fprintf(&sb, "%s", v)
+				} else {
+					fmt.Fprintf(&sb, ", %s", v)
+				}
+			}
+		// case TypeExtIsReach:
+		// case TypeISNeighbors:
+		case TypeIPv4IntfAddrs, TypeIPv6IntfAddrs:
+			first := true
+			for _, tlv := range tlvs[k] {
+				var addrs []net.IP
+				var err error
+				if k == TypeIPv4IntfAddrs {
+					addrs, err = tlv.IntfIPv4AddrsValue()
+				} else {
+					addrs, err = tlv.IntfIPv6AddrsValue()
+				}
+				if err != nil {
+					return nil, err
+				}
+				v, err := json.Marshal(addrs)
+				if err != nil {
+					return nil, err
+				}
+				if first {
+					first = false
+					fmt.Fprintf(&sb, "%s", v)
+				} else {
+					fmt.Fprintf(&sb, ", %s", v)
+				}
+			}
+		default:
+			// Generic dump
+			first := true
+			for _, tlv := range tlvs[k] {
+				// Need to cast back to get normal behavior
+				v := base64.StdEncoding.EncodeToString(tlv)
+				if first {
+					first = false
+					fmt.Fprintf(&sb, "\"%s\"", v)
+				} else {
+					fmt.Fprintf(&sb, ", \"%s\"", v)
+				}
+			}
+		}
+		sb.WriteString(" ] }")
+		fmt.Println(sb.String())
+	}
+
+	sb.WriteString("]")
+	return []byte(sb.String()), nil
+}
+
 // ===============================
 // TLV Insertion Utliity Functions
 // ===============================
@@ -500,7 +478,9 @@ func NewBufferTrack(size, offset, max uint, finish func(Data, uint8) error) *Buf
 		offset:  offset,
 		finish:  finish,
 	}
-	bt.newBuffer()
+	if err := bt.newBuffer(); err != nil {
+		panic("Unexpected newBuffer failure")
+	}
 	return bt
 }
 

@@ -594,8 +594,13 @@ func (a Area) String() string {
 
 // MarshalText converts an LSPID to text representation.
 func (a Area) MarshalText() ([]byte, error) {
-	return []byte(a.String()), nil
+	return []byte(ISOString(a, false)), nil
 }
+
+// // MarshalText converts an LSPID to text representation.
+// func (a Area) MarshalJSON() ([]byte, error) {
+//      return []byte(fmt.Sprintf(`"%s"`, ISOString(a, false))), nil
+// }
 
 // UnmarshalText converts a text rep of an LSPID to an LSPID
 func (a *Area) UnmarshalText(text []byte) error {

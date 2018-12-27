@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/choppsv1/goisis/clns"
 	"github.com/choppsv1/goisis/goisis/update"
 	"github.com/gorilla/mux"
@@ -70,7 +71,6 @@ func muxRoot(w http.ResponseWriter, r *http.Request, cdb *CircuitDB, updb [2]*up
 		errToHTTP(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusOK)
 }
 
 //              +--rw lsp-pacing-interval? rt-types:timer-value-milliseconds
@@ -311,12 +311,15 @@ func muxDB(w http.ResponseWriter, r *http.Request, updb [2]*update.DB) {
 // SetupManagement initializes the management interface.
 func SetupManagement(cdb *CircuitDB, updb [2]*update.DB) error {
 	rootF := func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("calling muxRoot")
 		muxRoot(w, r, cdb, updb)
 	}
 	intfF := func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("calling muxIntf")
 		muxIntfs(w, r, cdb)
 	}
 	updF := func(w http.ResponseWriter, r *http.Request) {
+		fmt.Printf("calling muxDB")
 		muxDB(w, r, updb)
 	}
 	r := mux.NewRouter()
