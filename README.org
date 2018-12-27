@@ -37,7 +37,11 @@ This is still a WIP. To get something in place I used mux and some basic URL
 routers that mostly correspond to the IS-IS yang data model. I'd like to come up
 with a better way to isolate all the back and forth between go routines being
 used by the getter code to be MP safe. Currently just using curl to fetch oper
-state, the handlers don't implement RESTCONF (I don't think).
+state.
+
+  curl 'http://localhost:8080/isis' | jq
+
+To dump all the state.
 
 ** External Dependencies
 
@@ -61,8 +65,10 @@ state, the handlers don't implement RESTCONF (I don't think).
 - RFC 5310 - Generic Cryptographic Authentication
 - Maybe Implement Decision Process (SPF)
 
+*** Maybe
+- RFC 5307 - GMPLS
+
 *** Maybe never.
 - RFC 5302 - Domain wide distribution, no route leaking.
 - RFC 5306 - Restart signaling (local support)
-- RFC 5307 - GMPLS
 - RFC 5311 - Simplifiied Extension of LSP space?
