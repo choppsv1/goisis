@@ -55,14 +55,14 @@ const (
 	TypePurge      Type = 13 // RFC6232 (marshaled)
 	TypeLspBufSize Type = 14 // ISO10590 (marshaled)
 
-	TypeExtIsReach Type = 22 //RFC5305
+	TypeExtIsReach Type = 22 // RFC5305
 
 	TypeIPv4Iprefix   Type = 128 // RFC1195
 	TypeNLPID         Type = 129 // RFC1195 (marshaled)
 	TypeIPv4Eprefix   Type = 130 // RFC1195
 	TypeIPv4IntfAddrs Type = 132 // RFC1195 (marshaled)
 	TypeRouterID      Type = 134 // (marshaled)
-	TypeExtIPv4Prefix Type = 135 //
+	TypeExtIPv4Prefix Type = 135 // RFC5305
 	TypeHostname      Type = 137 // RFC5301 (marshaled)
 	TypeIPv6IntfAddrs Type = 232 // RFC5308 (marshaled)
 	TypeIPv6Prefix    Type = 236 // RFC5308
@@ -425,26 +425,159 @@ func (tlv Data) decodeISExtReachValues() ([]ISExtReachDecode, error) {
 	return rv, nil
 }
 
+// IPPrefix is the same as net.IPNet but we can then add methods like a JSON
+// marshal function.
+type IPPrefix net.IPNet
+
+// MarshalText print an prefix in normal CIDR notation.
+func (p IPPrefix) MarshalText() ([]byte, error) {
+	return []byte((*net.IPNet)(&p).String()), nil
+}
+
 type IPPrefixDecode struct {
-	Metric uint32    `json:"metric"`
-	Prefix net.IPNet `json:"ip"`
-	Subtlv Data      `json:"subtlv,omitempty"`
-	Updown bool      `json:"updown"`
+	Metric uint32   `json:"metric"`
+	Prefix IPPrefix `json:"prefix"`
+	Subtlv Data     `json:"subtlv,omitempty"`
+	Updown bool     `json:"updown"`
+}
+
+type IPv4PrefixDecode struct {
+	IPPrefixDecode
+	ipbytes [4]byte
 }
 
 type IPv6PrefixDecode struct {
-	*IPPrefixDecode
+	IPPrefixDecode
 	External bool `json:"external"`
+	ipbytes  [16]byte
 }
 
-func (tlv Data) decodeIPv4PrefixValues() ([]IPPrefixDecode, error) {
-	// XXX
-	return nil, nil
+func (tlv Data) decodeIPv4PrefixValues() ([]IPv4PrefixDecode, error) {
+	t, l, v, err := GetTLV(tlv)
+	if err != nil {
+		return nil, err
+	}
+	count := 0
+	for len(v) > 0 {
+		if l < 5 {
+			return nil, fmt.Errorf("short length %d for TLV %s", l, Type(t))
+		}
+		// updown := (0x80 & v[4]) == 1
+		gotsub := (0x40 & v[4]) == 1
+		pfxlen := int(0x3f & v[4])
+		pfxblen := (pfxlen + 7) / 8
+		nlen := 5 + pfxblen
+		if gotsub {
+			nlen += 1
+		}
+		if nlen > len(v) {
+			return nil, fmt.Errorf("short length %d at least %d reqd for TLV %s", len(v), nlen, Type(t))
+		}
+		if gotsub {
+			sublen := int(v[nlen-1])
+			if sublen != 0 {
+				sub := v[nlen:]
+				if sublen > len(sub) {
+					return nil, fmt.Errorf("subtlv length %d > remaining len %d", len(sub), sublen)
+				}
+			}
+			nlen += sublen
+		}
+		v = v[nlen:]
+		l = l - nlen
+		count++
+	}
+
+	// Extract the data
+	_, _, v, _ = GetTLV(tlv)
+	rv := make([]IPv4PrefixDecode, count)
+	for i := 0; i < count; i++ {
+		rv[i].Metric = binary.BigEndian.Uint32(v)
+		gotsub := (0x40 & v[4]) == 1
+		pfxlen := int(0x3f & v[4])
+		pfxblen := (pfxlen + 7) / 8
+		nlen := 5 + pfxblen
+
+		rv[i].Updown = (0x80 & v[4]) == 1
+		rv[i].Prefix.IP = rv[i].ipbytes[:]
+		rv[i].Prefix.Mask = net.CIDRMask(pfxlen, 32)
+		copy(rv[i].Prefix.IP, v[5:])
+
+		if gotsub {
+			sublen := int(v[nlen])
+			if sublen != 0 {
+				rv[i].Subtlv = make(Data, sublen)
+				copy(rv[i].Subtlv, v[nlen+1:])
+			}
+			nlen += 1 + sublen
+		}
+		v = v[nlen:]
+	}
+	return rv, nil
 }
 
 func (tlv Data) decodeIPv6PrefixValues() ([]IPv6PrefixDecode, error) {
-	// XXX
-	return nil, nil
+	t, l, v, err := GetTLV(tlv)
+	if err != nil {
+		return nil, err
+	}
+	count := 0
+	for len(v) > 0 {
+		if l < 5 {
+			return nil, fmt.Errorf("short length %d for TLV %s", l, Type(t))
+		}
+		gotsub := (0x20 & v[4]) == 1
+		pfxlen := int(v[5])
+		pfxblen := (pfxlen + 7) / 8
+		nlen := 6 + pfxblen
+		if gotsub {
+			nlen += 1
+		}
+		if nlen > len(v) {
+			return nil, fmt.Errorf("short length %d at least %d reqd for TLV %s", len(v), nlen, Type(t))
+		}
+		if gotsub {
+			sublen := int(v[nlen-1])
+			if sublen != 0 {
+				sub := v[nlen:]
+				if sublen > len(sub) {
+					return nil, fmt.Errorf("subtlv length %d > remaining len %d", len(sub), sublen)
+				}
+			}
+			nlen += sublen
+		}
+		v = v[nlen:]
+		l = l - nlen
+		count++
+	}
+
+	// Extract the data
+	_, _, v, _ = GetTLV(tlv)
+	rv := make([]IPv6PrefixDecode, count)
+	for i := 0; i < count; i++ {
+		rv[i].Metric = binary.BigEndian.Uint32(v)
+		gotsub := (0x20 & v[4]) == 1
+		pfxlen := int(v[5])
+		pfxblen := (pfxlen + 7) / 8
+		nlen := 6 + pfxblen
+
+		rv[i].Updown = (0x80 & v[4]) == 1
+		rv[i].External = (0x40 & v[4]) == 1
+		rv[i].Prefix.IP = rv[i].ipbytes[:]
+		rv[i].Prefix.Mask = net.CIDRMask(pfxlen, 128)
+		copy(rv[i].Prefix.IP, v[5:])
+
+		if gotsub {
+			sublen := int(v[nlen])
+			if sublen != 0 {
+				rv[i].Subtlv = make(Data, sublen)
+				copy(rv[i].Subtlv, v[nlen+1:])
+			}
+			nlen += 1 + sublen
+		}
+		v = v[nlen:]
+	}
+	return rv, nil
 }
 
 func marshal(sb *strings.Builder, value interface{}, first *bool, err error) error {
