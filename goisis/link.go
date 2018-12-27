@@ -56,6 +56,7 @@ type LinkLAN struct {
 	helloInt  uint
 	holdMult  uint
 	priority  uint8
+	metric    uint32
 	lclCircID uint8
 	lanID     clns.NodeID
 	ourlanID  clns.NodeID
@@ -65,6 +66,7 @@ type LinkLAN struct {
 	expireC    chan clns.SystemID
 	iihpkt     chan *RecvPDU
 	getAdjC    chan getAdj
+	rpC        chan RPC
 	disTimer   *time.Timer
 	disElected bool
 	snpaMap    map[clns.SNPA]*Adj
@@ -92,8 +94,10 @@ func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool
 		priority: 67, // clns.DefHelloPri,
 		helloInt: clns.DefHelloInt,
 		holdMult: clns.DefHelloMult,
+		metric:   clns.DefExtISMetric,
 		expireC:  make(chan clns.SystemID, 10),
 		getAdjC:  make(chan getAdj, 10),
+		rpC:      make(chan RPC),
 		iihpkt:   make(chan *RecvPDU, 3),
 		snpaMap:  make(map[clns.SNPA]*Adj),
 		srcidMap: make(map[clns.SystemID]*Adj),

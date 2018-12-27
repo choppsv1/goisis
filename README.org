@@ -20,6 +20,7 @@ with this design.
 - One per LAN link (level) or per P2P link for receiving and sending hello frames
 - One per LAN link (level) or per P2P link for processing SRM/SSN flags (flooding)
 - One per level for Update Process (LSP DB) which also handles CSNP using a cache.
+- One for circuit DB to handle interface changes, addressing (needs more work).
 
 *** No Locks
 The code has no locks. It fully utilizes go's channels to communicate rather
@@ -31,27 +32,34 @@ for a Circuit. In particular adjacencies are associated with Links. In the case
 of a LAN Circuit there will be one Link per level. In the case of a
 point-to-point Circuit there will be only a single Link.
 
+*** Mgmt/Yang
+This is still a WIP. To get something in place I used mux and some basic URL
+routers that mostly correspond to the IS-IS yang data model. I'd like to come up
+with a better way to isolate all the back and forth between go routines being
+used by the getter code to be MP safe. Currently just using curl to fetch oper
+state, the handlers don't implement RESTCONF (I don't think).
+
 ** External Dependencies
 
 - Adaptive Radix Trie ("github.com/plar/go-adaptive-radix-tree")
 - Gorilla Mux for serving up state ("github.com/gorilla/mux")
 
 ** Implementation notes
-- Modern only; no legacy narrow metrics, no clns/clnp routing.
-- Supported RFCs of note
-  - RFC5301 Dyanmic Hostname
-  - RFC5305 Extended Reachability
-  - RFC5308 IPv6 supported
+- Modern only; no legacy {narrow metrics, 2-way p2p, clns/clnp routing}.
+- Some extra functionality (RFCs)
+  - RFC 5301 Dyanmic Hostname
+  - RFC 5305 Extended Reachability
+  - RFC 5308 IPv6 supported
+  - RFC 6232 Purge origination
 ** TODO Missing Items
 *** Immediate need
-- Implement Decision Process (SPF)
 - Implement P2P interfaces (RFC5303 3-way, RFC5309 p2pOverLAN)
-- RFC 6232 - purge origination (easy)
-- RFC 5306 - Restart signaling (neighbor support)
 
 *** Want
-- RFC 5310 - Generic Cryptographic Authentication
 - RFC 5304 - Cryptographic Authentication
+- RFC 5306 Restart signaling (neighbor support)
+- RFC 5310 - Generic Cryptographic Authentication
+- Maybe Implement Decision Process (SPF)
 
 *** Maybe never.
 - RFC 5302 - Domain wide distribution, no route leaking.

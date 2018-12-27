@@ -51,9 +51,9 @@ func (lsp *lspSegment) cksum() uint16 {
 	return pkt.GetUInt16(lsp.hdr[clns.HdrLSPCksum:])
 }
 
-// func (lsp *lspSegment) getFlags() clns.LSPFlags {
-// 	return clns.LSPFlags(lsp.hdr[clns.HdrLSPFlags])
-// }
+func (lsp *lspSegment) flags() clns.LSPFlags {
+	return clns.LSPFlags(lsp.hdr[clns.HdrLSPFlags] & clns.LSPFlagMask)
+}
 
 // get the lsp segment with the given LSPID or nil if not present.
 func (db *DB) get(lspid []byte) *lspSegment {
@@ -65,7 +65,7 @@ func (db *DB) get(lspid []byte) *lspSegment {
 }
 
 // newLSPSegment creates a new lspSegment struct
-func (db *DB) newLSPSegment(payload []byte, tlvs map[tlv.Type][]tlv.Data) *lspSegment {
+func (db *DB) newLSPSegment(payload []byte, tlvs tlv.Map) *lspSegment {
 	hdr := Slicer(payload, clns.HdrCLNSSize, clns.HdrLSPSize)
 	lsp := &lspSegment{
 		payload: payload,
@@ -111,7 +111,7 @@ func (db *DB) newZeroLSPSegment(lifetime uint16, lspid *clns.LSPID, cksum uint16
 }
 
 // updateLSPSegment updates an lspSegment with a newer version received on a link.
-func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
+func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs tlv.Map) {
 	Debug(DbgFUpd, "%s: Updating %s", db, lsp)
 
 	// On entering the hold timer has already been stopped by receiveLSP
@@ -135,6 +135,8 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 			Debug(DbgFUpd, "%s: Received Purge LSP %s", db, lsp)
 			lsp.zeroLife = xtime.NewHoldTimer(clns.ZeroMaxAge,
 				func() { db.expireC <- lsp.lspid })
+			// Optional add Purge TLV if missing, need adjacency
+			// received on for that.
 		} else if lsp.zeroLife.Until() < clns.ZeroMaxAge {
 			// Refresh zero age. If we can't reset the timer b/c
 			// it's fired/firing just create a new one. We handle it.
@@ -161,20 +163,11 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs map[tlv.Typ
 		// called now after update.
 		lsp.zeroLife.Stop()
 		lsp.zeroLife = nil
+		// // XXX testing
+		// lifetime = 10
 		lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
 		Debug(DbgFUpd, "%s: Reset hold timer for Purged %s", db, lsp)
 	}
-
-	// XXX update refresh timer?
-	// if lsp.isOurs {
-	//      // assert(lsp.refreshTimer != nil)
-	//      timeleft := lifetime * 3 / 4
-	//      // assert timeleft
-	//      if !lsp.refreshTimer.Stop() {
-	//              <-lsp.refreshTimer.C
-	//      }
-	//      lsp.refreshTimer.Reset(timeleft)
-	// }
 
 	Debug(DbgFUpd, "%s: Updated %s", db, lsp)
 }
@@ -223,12 +216,21 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	db.setAllFlag(SRM, lsp.lspid, nil)
 
 	// b) Retain only LSP header. XXX we need more space for auth and purge tlv
-	pdulen := uint16(clns.HdrCLNSSize + clns.HdrLSPSize)
+	purgelen := uint16(2 + clns.SysIDLen)
+	pdulen := uint16(clns.HdrCLNSSize+clns.HdrLSPSize) + purgelen
+
 	Debug(DbgFUpd, "Shrinking lsp.payload %d:%d to %d", len(lsp.payload), cap(lsp.payload), pdulen)
+
 	lsp.payload = lsp.payload[:pdulen]
 	Debug(DbgFUpd, "Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
+
+	// Add Purge TLV, RFC6232.
+	purgetlv := lsp.payload[pdulen-purgelen:]
+	purgetlv[0] = byte(tlv.TypePurge)
+	purgetlv[1] = byte(clns.SysIDLen)
+	copy(purgetlv[2:], db.sysid[:])
 
 	// Update the CSNP cache
 	db.cacheUpdate(lsp.hdr)
@@ -300,7 +302,7 @@ func compareLSP(lsp *lspSegment, e []byte) lspCompareResult {
 
 // receiveLSP receives an LSP from flooding
 // nolint: gocyclo
-func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data) {
+func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs tlv.Map) {
 	// We input or own LSP here with nil circuit to differentiate.
 	fromUs := c == nil
 
@@ -331,7 +333,7 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs map[tlv.Type][]tlv.Data
 
 	if isOurs && !fromUs {
 		// XXX check all this.
-		pnid := lsp.lspid[7]
+		pnid := lspid[7]
 		var unsupported bool
 		if pnid == 0 {
 			unsupported = false // always support non-pnode LSP
@@ -492,7 +494,9 @@ func (db *DB) receiveSNP(c Circuit, complete bool, payload []byte, tlvs tlv.Map)
 		copy(elspid[:], e[tlv.SNPEntLSPID:])
 
 		lsp := db.get(elspid[:])
-		mentioned.Insert(elspid[:], true)
+		if complete {
+			mentioned.Insert(elspid[:], true)
+		}
 
 		// 7.3.15.2: b1
 		result := compareLSP(lsp, e)

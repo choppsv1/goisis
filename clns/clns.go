@@ -83,6 +83,15 @@ const (
 //
 type LSPFlags uint8
 
+var LSPFlagMap = map[LSPFlags]string{
+	LSPFOverload: "OVERLOAD",
+	LSPFMetDef:   "ATTDEF",
+	LSPFMetDly:   "ATTDLYFlag",
+	LSPFMetExp:   "ATTEXP",
+	LSPFMetErr:   "ATTERR",
+	LSPFPbit:     "PBIT",
+}
+
 // The LSP Flags
 const (
 	_ LSPFlags = 1 << iota
@@ -94,6 +103,37 @@ const (
 	LSPFMetErr
 	LSPFPbit
 )
+
+const (
+	LSPFISTypeMask = uint8(0x3)
+	LSPFlagMask    = ^uint8(0x3)
+)
+
+// MarshalText to convert LSPFlag to text encoding (yang value)
+func (f LSPFlags) MarshalText() ([]byte, error) {
+	sl := make([]string, 0, 9)
+	for k, v := range LSPFlagMap {
+		if (f & k) != 0 {
+			sl = append(sl, v)
+		}
+	}
+	return []byte(strings.Join(sl, "|")), nil
+}
+
+// // UnmarshalText to convert from text (yang value) to LSP flag.
+// func (lf *LSPFlags) UnmarshalText(text []byte) error {
+// 	switch string(text) {
+// 	case "level-1":
+// 		*lf = 0x1
+// 	case "level-2":
+// 		*lf = 0x2
+// 	case "level-all":
+// 		*lf = 0x3
+// 	default:
+// 		return fmt.Errorf("Invalid level string for unmarshal %s", text)
+// 	}
+// 	return nil
+// }
 
 // MakeLSPFlags returns a byte for header insertion.
 func MakeLSPFlags(flags LSPFlags, istype LevelFlag) uint8 {
@@ -153,11 +193,26 @@ const (
 	LSPOrigBufSize = LSPRecvBufSize
 )
 
+// NLPID is a ISO network layer process identifier
+type NLPID byte
+
 // NLPID values
 const (
 	NLPIDIPv4 = 0xcc
 	NLPIDIPv6 = 0x8e
 )
+
+// MarshalText to convert system ID to text encoding (yang value)
+func (nlpid NLPID) MarshalText() ([]byte, error) {
+	switch nlpid {
+	case NLPIDIPv4:
+		return []byte("IPv4"), nil
+	case NLPIDIPv6:
+		return []byte("IPv6"), nil
+	default:
+		return []byte(fmt.Sprint("%d", nlpid)), nil
+	}
+}
 
 // HeaderTemplate are the static values we use in the CLNS header.
 var HeaderTemplate = []uint8{
@@ -304,7 +359,7 @@ var PSNPTypeMap = [2]PDUType{PDUTypePSNPL1, PDUTypePSNPL2}
 func (typ PDUType) String() string {
 	// XXX add nice map with strings
 	if desc, ok := PDUTypeDesc[typ]; ok {
-		return fmt.Sprintf("%s", desc)
+		return desc
 	} else {
 		return fmt.Sprintf("%d", typ)
 	}
@@ -417,6 +472,21 @@ func (s SNPA) String() string {
 	return net.HardwareAddr(s[:]).String()
 }
 
+// MarshalText to convert SNPA to text encoding (yang value)
+func (s SNPA) MarshalText() ([]byte, error) {
+	return []byte(net.HardwareAddr(s[:]).String()), nil
+}
+
+// UnmarshalText to convert yang value to SNPA
+func (s *SNPA) UnmarshalText(text []byte) error {
+	hw, err := net.ParseMAC(string(s[:]))
+	if err != nil {
+		return err
+	}
+	*s = HWToSNPA(hw)
+	return nil
+}
+
 func HWToSNPA(h net.HardwareAddr) (snpa SNPA) {
 	copy(snpa[:], h)
 	return
@@ -475,6 +545,24 @@ func (n NodeID) String() string {
 	return ISOString(n[:], true)
 }
 
+// MarshalText to convert system ID to text encoding (yang value)
+func (n NodeID) MarshalText() ([]byte, error) {
+	return []byte(ISOString(n[:], true)), nil
+}
+
+// UnmarshalText to convert from text (yang value) to SystemID
+func (n *NodeID) UnmarshalText(text []byte) error {
+	b, err := ISOEncode(string(text))
+	if err != nil {
+		return err
+	}
+	if len(b) != NodeIDLen {
+		return fmt.Errorf("Wrong length for Nodeid %d", len(b))
+	}
+	copy((*n)[:], b)
+	return nil
+}
+
 // LSPID identifies an LSP segment for a node in the network graph, it is
 // comprised of a NodeID and a final segment octet to allow for multiple
 // segments to describe an full LSP.
@@ -491,6 +579,24 @@ func MakeLSPID(sysid SystemID, pnid, segid uint8) LSPID {
 
 func (l LSPID) String() string {
 	return ISOString(l[:LSPIDLen], true)
+}
+
+// MarshalText converts an LSPID to text representation.
+func (l LSPID) MarshalText() ([]byte, error) {
+	return []byte(l.String()), nil
+}
+
+// UnmarshalText converts a text rep of an LSPID to an LSPID
+func (l *LSPID) UnmarshalText(text []byte) error {
+	lspid, err := ISOEncode(string(text))
+	if err != nil {
+		return err
+	}
+	if len(lspid) != LSPIDLen {
+		return fmt.Errorf("Wrong length for LSPID %d", len(lspid))
+	}
+	copy((*l)[:], lspid)
+	return nil
 }
 
 // LSPIDString prints a LSPID given a generic byte slice.
@@ -511,6 +617,32 @@ func (la LSPIDArray) Less(i, j int) bool {
 
 func (la LSPIDArray) Swap(i, j int) {
 	la[i], la[j] = la[j], la[i]
+}
+
+type Area []byte
+
+func (a Area) String() string {
+	return ISOString(a, false)
+}
+
+// MarshalText converts an LSPID to text representation.
+func (a Area) MarshalText() ([]byte, error) {
+	return []byte(ISOString(a, false)), nil
+}
+
+// // MarshalText converts an LSPID to text representation.
+// func (a Area) MarshalJSON() ([]byte, error) {
+//      return []byte(fmt.Sprintf(`"%s"`, ISOString(a, false))), nil
+// }
+
+// UnmarshalText converts a text rep of an LSPID to an LSPID
+func (a *Area) UnmarshalText(text []byte) error {
+	area, err := ISOEncode(string(text))
+	if err != nil {
+		return err
+	}
+	*a = area
+	return nil
 }
 
 //

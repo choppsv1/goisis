@@ -11,9 +11,34 @@ import (
 	"time"
 )
 
+// Generic types
+
+// RPCMethod is the function type for RPC
+type RPCMethod func() (interface{}, error)
+
+// RPC is passed on a channel to invoke the function and return a result on a channel
+type RPC struct {
+	F      func() interface{}
+	Result chan interface{}
+}
+
+func DoRPC(C chan<- RPC, F func() interface{}) (interface{}, error) {
+	rpc := RPC{F, make(chan interface{})}
+	C <- rpc
+	result := <-rpc.Result
+	switch v := result.(type) {
+	case error:
+		return nil, v
+	default:
+		return v, nil
+	}
+}
+
 //
 // Consolidate these into instance type to support multi-instance.
 //
+
+var GlbStartTime = time.Now()
 
 // GlbISType specifies which levels IS-IS is enabled on
 var GlbISType clns.LevelFlag
@@ -140,7 +165,7 @@ func main() {
 		}
 	}
 
-	SetupManagement()
+	SetupManagement(cdb, updb)
 
 	ticker := time.NewTicker(time.Second * 120)
 	for _ = range ticker.C {
