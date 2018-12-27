@@ -47,7 +47,7 @@ const (
 
 	//XXX Conflict!
 	TypeIsVneighbors Type = 7 // ISO10590
-	TypeInstanceID   Type = 7
+	TypeInstanceID   Type = 7 // RFC6822
 
 	TypePadding    Type = 8  // ISO10590 (marshaled)
 	TypeSNPEntries Type = 9  // ISO10590 (marshaled)
@@ -208,6 +208,34 @@ func (b Data) IntfIPv6AddrsValue() ([]net.IP, error) {
 func (b Data) ISNeighborsValue() ([]SystemID, error) {
 	ids := make([]SystemID, 0, 2)
 	return ids, b.newFixedValues(6, &ids)
+}
+
+type InstanceIDValue struct {
+	Iid  uint16   `json:"iid"`
+	Itid []uint16 `json:"itid"`
+}
+
+func (b Data) decodeInstanceIDValues() (InstanceIDValue, error) {
+	rv := InstanceIDValue{}
+
+	t, l, v, err := GetTLV(b)
+	if err != nil {
+		return rv, err
+	}
+	if l < 2 || l%2 == 1 {
+		return rv, fmt.Errorf("incorrect len %d for type %s", l, Type(t))
+	}
+	rv.Iid = binary.BigEndian.Uint16(v)
+	count := l/2 - 1
+	if count > 0 {
+		ids := make([]uint16, count)
+		for i, j := 0, 0; i < count; i, j = i+1, j+2 {
+			ids[i] = binary.BigEndian.Uint16(v[i:])
+		}
+		rv.Itid = ids
+	}
+	return rv, nil
+
 }
 
 // AreaAddrsValue returns an array of address found in the TLV.
@@ -656,13 +684,14 @@ func (tlvs Map) MarshalJSON() ([]byte, error) {
 				value, err = tlv.decodeIPv4PrefixValues()
 			case TypeIPv6Prefix:
 				value, err = tlv.decodeIPv6PrefixValues()
-			case TypeAuth:
 			case TypeInstanceID:
+				value, err = tlv.decodeInstanceIDValues()
 			// Non-LSP
 			case TypeSNPEntries:
 				value, err = tlv.decodeSNPEntryValues()
 			case TypePadding:
 				value = "<padding>"
+			// case TypeAuth:
 			default:
 				break
 			}
