@@ -39,9 +39,9 @@ with a better way to isolate all the back and forth between go routines being
 used by the getter code to be MP safe. Currently just using curl to fetch oper
 state.
 
-  curl 'http://localhost:8080/isis' | jq
-
-To dump all the state.
+#+begin_src bash
+  $ curl 'http://localhost:8080/isis' | jq
+#+end_src
 
 ** External Dependencies
 
