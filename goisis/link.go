@@ -50,7 +50,7 @@ type chgSxxFlag struct {
 type LinkLAN struct {
 	circuit *CircuitLAN
 	l       clns.Level
-	li      clns.LIndex // level - 1 for array indexing
+	li      clns.Lindex // level - 1 for array indexing
 
 	// Hello Process
 	helloInt  uint
@@ -85,7 +85,7 @@ func (link *LinkLAN) String() string {
 //
 // NewLinkLAN creates a LAN link for a given IS-IS level.
 //
-func NewLinkLAN(c *CircuitLAN, li clns.LIndex, updb *update.DB, quit <-chan bool) *LinkLAN {
+func NewLinkLAN(c *CircuitLAN, li clns.Lindex, updb *update.DB, quit <-chan bool) *LinkLAN {
 	link := &LinkLAN{
 		circuit:  c,
 		l:        li.ToLevel(),

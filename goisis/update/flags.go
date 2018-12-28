@@ -34,7 +34,7 @@ type ChgSxxFlag struct {
 	Set   bool        // set or clear
 	All   bool        // all or single link
 	Flag  SxxFlag     // flag to set or clear
-	Li    clns.LIndex // level index
+	Li    clns.Lindex // level index
 }
 
 //

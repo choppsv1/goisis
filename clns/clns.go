@@ -242,11 +242,11 @@ func (l Level) String() string {
 	return fmt.Sprintf("L%d", int(l))
 }
 
-func (l Level) ToIndex() LIndex {
+func (l Level) ToIndex() Lindex {
 	if l < 1 || l > 2 {
 		panic(fmt.Sprintf("Invalid l %d", l))
 	}
-	return LIndex(l - 1)
+	return Lindex(l - 1)
 }
 
 func (l Level) ToFlag() LevelFlag {
@@ -309,23 +309,23 @@ func (lf *LevelFlag) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// LIndex is an IS-IS level - 1
-type LIndex uint
+// Lindex is an IS-IS level - 1
+type Lindex uint
 
-func (li LIndex) String() string {
+func (li Lindex) String() string {
 	return fmt.Sprintf("L%d", int(li+1))
 }
 
 // ToLevel returns the lindex as a Level.
-func (li LIndex) ToLevel() Level {
+func (li Lindex) ToLevel() Level {
 	return Level(li + 1)
 }
 
-func (li LIndex) ToFlag() LevelFlag {
+func (li Lindex) ToFlag() LevelFlag {
 	return LevelFlag(1 << uint(li))
 }
 
-func (lf LevelFlag) IsLIndexEnabled(li LIndex) bool {
+func (lf LevelFlag) IsLindexEnabled(li Lindex) bool {
 	return (li.ToFlag() & lf) != 0
 }
 
@@ -719,11 +719,11 @@ func (pdutype PDUType) GetPDULevel() (Level, error) {
 }
 
 //
-// GetPDULIndex returns the level index of the PDU type assumes the type is valid
+// GetPDULindex returns the level index of the PDU type assumes the type is valid
 //
-func (pdutype PDUType) GetPDULIndex() LIndex {
+func (pdutype PDUType) GetPDULindex() Lindex {
 
-	return LIndex(PDULevelMap[pdutype] - 1)
+	return Lindex(PDULevelMap[pdutype] - 1)
 }
 
 //

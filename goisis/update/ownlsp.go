@@ -16,7 +16,7 @@ import (
 
 type ownLSP struct {
 	Pnid      uint8
-	li        clns.LIndex
+	li        clns.Lindex
 	db        *DB
 	c         Circuit
 	segments  map[uint8][]byte
@@ -71,7 +71,13 @@ func (lsp *ownLSP) finishSegment(payload []byte, i uint8) error {
 	// Fill in LSP header
 	pkt.PutUInt16(hdr[clns.HdrLSPPDULen:], uint16(len(payload)))
 	copy(hdr[clns.HdrLSPLSPID:], lspid[:])
-	hdr[clns.HdrLSPFlags] = clns.MakeLSPFlags(0, lsp.db.istype)
+
+	if lsp.Pnid == 0 {
+		// For now we mark ourselves Overload since we don't implement // Decision/SPF
+		hdr[clns.HdrLSPFlags] = clns.MakeLSPFlags(clns.LSPFOverload, lsp.db.istype)
+	} else {
+		hdr[clns.HdrLSPFlags] = clns.MakeLSPFlags(0, lsp.db.istype)
+	}
 
 	lsp.db.incSeqNo(payload, seqno)
 

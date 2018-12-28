@@ -40,8 +40,8 @@ var llcTemplate = []uint8{
 //
 type Circuit interface {
 	Addrs(v4, linklocal bool) []net.IPNet
-	ChgFlag(update.SxxFlag, *clns.LSPID, bool, clns.LIndex)
-	CID(clns.LIndex) uint8
+	ChgFlag(update.SxxFlag, *clns.LSPID, bool, clns.Lindex)
+	CID(clns.Lindex) uint8
 	ClosePDU(ether.Frame, []byte) ether.Frame
 	FrameToPDU([]byte, syscall.Sockaddr) *RecvPDU
 	IsP2P() bool
@@ -49,7 +49,7 @@ type Circuit interface {
 	OpenFrame(net.HardwareAddr) (ether.Frame, []byte)
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	RecvHello(pdu *RecvPDU)
-	Send([]byte, clns.LIndex)
+	Send([]byte, clns.Lindex)
 	YangData() (*YangInterface, error)
 }
 
@@ -63,7 +63,7 @@ type Circuit interface {
 type RecvPDU struct {
 	payload []byte
 	pdutype clns.PDUType
-	li      clns.LIndex
+	li      clns.Lindex
 	tlvs    map[tlv.Type][]tlv.Data
 	link    Link
 	src     net.HardwareAddr
@@ -296,7 +296,7 @@ func (c *CircuitLAN) ClosePDU(etherp ether.Frame, endp []byte) ether.Frame {
 }
 
 func (c *CircuitLAN) RecvHello(pdu *RecvPDU) {
-	li := pdu.pdutype.GetPDULIndex()
+	li := pdu.pdutype.GetPDULindex()
 	ll := c.levlink[li]
 	if ll == nil {
 		Debug(DbgFPkt, "%s: Received %s IIH on %s circuit", c, pdu.pdutype, c.lf)
@@ -306,7 +306,7 @@ func (c *CircuitLAN) RecvHello(pdu *RecvPDU) {
 
 }
 
-func (c *CircuitLAN) ChgFlag(flag update.SxxFlag, lspid *clns.LSPID, set bool, li clns.LIndex) {
+func (c *CircuitLAN) ChgFlag(flag update.SxxFlag, lspid *clns.LSPID, set bool, li clns.Lindex) {
 	c.levlink[li].flagsC <- chgSxxFlag{
 		set:   set,
 		flag:  flag,
@@ -324,7 +324,7 @@ func (c *CircuitLAN) Addrs(v4, linklocal bool) []net.IPNet {
 	}
 }
 
-func (c *CircuitLAN) CID(li clns.LIndex) uint8 {
+func (c *CircuitLAN) CID(li clns.Lindex) uint8 {
 	return c.levlink[li].lclCircID
 }
 
@@ -336,7 +336,7 @@ func (c *CircuitLAN) MTU() uint {
 	return uint(c.intf.MTU)
 }
 
-func (c *CircuitLAN) Send(pdu []byte, li clns.LIndex) {
+func (c *CircuitLAN) Send(pdu []byte, li clns.Lindex) {
 	// XXX this sucks we don't want to copy here, instead let's move to IOV
 	// packet descriptions.
 	etherp, payload := c.OpenFrame(clns.AllLxIS[li])
@@ -347,13 +347,13 @@ func (c *CircuitLAN) Send(pdu []byte, li clns.LIndex) {
 // Adjacencies arranges for tlvb.AdjInfo to be sent on the provided
 // channel for all Up adjacencies followed by sending of update.AdjDone to mark
 // the end.
-func (c *CircuitLAN) Adjacencies(C chan<- interface{}, li clns.LIndex, forPN bool) {
+func (c *CircuitLAN) Adjacencies(C chan<- interface{}, li clns.Lindex, forPN bool) {
 	c.levlink[li].getAdjC <- getAdj{C, forPN}
 }
 
 // IPReach arranges for tlvb.IPInfo to be sent on the provided change for all
 // IPv4 reachability associated with this circuit.
-func (c *CircuitLAN) IPReach(ipv4 bool, C chan<- interface{}, li clns.LIndex) {
+func (c *CircuitLAN) IPReach(ipv4 bool, C chan<- interface{}, li clns.Lindex) {
 	// XXX a circuit probably needs it's own interface address go routine.
 	// For now just spawn a go routine to act like one, we don't support
 	// dynamic address changes yet.

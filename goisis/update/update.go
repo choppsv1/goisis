@@ -34,14 +34,14 @@ const LSPGenDelay = 100 * time.Millisecond
 // Circuit is the interface that update requires for circuits.
 type Circuit interface {
 	Addrs(v4, linklocal bool) []net.IPNet
-	Adjacencies(chan<- interface{}, clns.LIndex, bool)
-	IPReach(bool, chan<- interface{}, clns.LIndex)
-	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.LIndex)
-	CID(clns.LIndex) uint8
+	Adjacencies(chan<- interface{}, clns.Lindex, bool)
+	IPReach(bool, chan<- interface{}, clns.Lindex)
+	ChgFlag(SxxFlag, *clns.LSPID, bool, clns.Lindex)
+	CID(clns.Lindex) uint8
 	IsP2P() bool
 	Name() string
 	MTU() uint
-	Send([]byte, clns.LIndex)
+	Send([]byte, clns.Lindex)
 }
 
 // =====
@@ -52,7 +52,7 @@ type Circuit interface {
 type DB struct {
 	sysid     clns.SystemID  // change to public as immutable
 	istype    clns.LevelFlag // change to public as immutable
-	li        clns.LIndex    // change to public as immutable
+	li        clns.Lindex    // change to public as immutable
 	cache     csnpCache
 	areas     [][]byte
 	nlpid     []byte
