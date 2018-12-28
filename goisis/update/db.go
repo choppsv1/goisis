@@ -75,14 +75,11 @@ func (db *DB) newLSPSegment(payload []byte, tlvs tlv.Map) *lspSegment {
 	copy(lsp.lspid[:], hdr[clns.HdrLSPLSPID:])
 
 	lifetime := pkt.GetUInt16(hdr[clns.HdrLSPLifetime:])
-	// // XXX testing
-	// lifetime = 30
+	if db.testPurge {
+		lifetime = 30
+	}
 	lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
 	lsp.isOurs = bytes.Equal(lsp.lspid[:clns.SysIDLen], db.sysid[:])
-	// // We aren't locked but this isn't in the DB yet.
-	// if lsp.isOurs {
-	//      lsp.refreshTimer = time.NewTimer(lsp.lifetime.Remainingg())
-	// }
 
 	db.db.Insert(lsp.lspid[:], lsp)
 	db.cacheAdd(lsp.hdr)
@@ -163,13 +160,20 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs tlv.Map) {
 		// called now after update.
 		lsp.zeroLife.Stop()
 		lsp.zeroLife = nil
-		// // XXX testing
-		// lifetime = 10
+		if db.testPurge {
+			lifetime = 10
+		}
 		lsp.life = xtime.NewHoldTimer(lifetime, func() { db.expireC <- lsp.lspid })
 		Debug(DbgFUpd, "%s: Reset hold timer for Purged %s", db, lsp)
 	}
 
 	Debug(DbgFUpd, "%s: Updated %s", db, lsp)
+}
+
+func copyTLV(dst, src []byte) int {
+	l := len(src)
+	copy(dst, src)
+	return l
 }
 
 // initiatePurgeLSP initiates a purge of an LSPSegment due to lifetime running
@@ -215,22 +219,46 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	// db.setsrm <- lsp.lspid
 	db.setAllFlag(SRM, lsp.lspid, nil)
 
-	// b) Retain only LSP header. XXX we need more space for auth and purge tlv
-	purgelen := uint16(2 + clns.SysIDLen)
-	pdulen := uint16(clns.HdrCLNSSize+clns.HdrLSPSize) + purgelen
+	// b) Retain only LSP header + purge TLVs
+	var savespace [1024]byte
+	tlvp := tlv.Data(savespace[:])
 
+	// Save space for purge TLV
+	tlvp = tlvp[2+clns.SysIDLen:]
+
+	// Save other purge OK TLVs
+	if lsp.tlvs[tlv.TypeHostname] != nil {
+		l := copyTLV(tlvp, lsp.tlvs[tlv.TypeHostname][0])
+		tlvp = tlvp[l:]
+	}
+	if lsp.tlvs[tlv.TypeInstanceID] != nil {
+		l := copyTLV(tlvp, lsp.tlvs[tlv.TypeInstanceID][0])
+		tlvp = tlvp[l:]
+	}
+	if lsp.tlvs[tlv.TypeFingerprint] != nil {
+		l := copyTLV(tlvp, lsp.tlvs[tlv.TypeFingerprint][0])
+		tlvp = tlvp[l:]
+	}
+	// Purge LSP
+	purgetlv := savespace[:]
+	purgetlv[0] = byte(tlv.TypePurge)
+	purgetlv[1] = byte(clns.SysIDLen)
+	copy(purgetlv[2:], db.sysid[:])
+
+	// Shrink LSP Payload
+	purgelen := tlv.GetOffset(savespace[:], tlvp)
+	pdulen := clns.HdrCLNSSize + clns.HdrLSPSize + purgelen
 	Debug(DbgFUpd, "Shrinking lsp.payload %d:%d to %d", len(lsp.payload), cap(lsp.payload), pdulen)
 
 	lsp.payload = lsp.payload[:pdulen]
 	Debug(DbgFUpd, "Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
-	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], pdulen)
+	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], uint16(pdulen))
 
-	// Add Purge TLV, RFC6232.
-	purgetlv := lsp.payload[pdulen-purgelen:]
-	purgetlv[0] = byte(tlv.TypePurge)
-	purgetlv[1] = byte(clns.SysIDLen)
-	copy(purgetlv[2:], db.sysid[:])
+	// Add back in the purge TLVs
+	tlvp = lsp.payload[pdulen-purgelen:]
+	copy(tlvp, savespace[:purgelen])
+	lsp.tlvs, _ = tlvp.ParseTLV()
 
 	// Update the CSNP cache
 	db.cacheUpdate(lsp.hdr)

@@ -55,6 +55,8 @@ const (
 	TypePurge      Type = 13 // RFC6232 (marshaled)
 	TypeLspBufSize Type = 14 // ISO10590 (marshaled)
 
+	TypeFingerprint Type = 15 // RFC8196
+
 	TypeExtIsReach Type = 22 // RFC5305
 
 	TypeIPv4Iprefix   Type = 128 // RFC1195

@@ -53,6 +53,7 @@ type DB struct {
 	sysid     clns.SystemID  // change to public as immutable
 	istype    clns.LevelFlag // change to public as immutable
 	li        clns.Lindex    // change to public as immutable
+	testPurge bool
 	cache     csnpCache
 	areas     [][]byte
 	nlpid     []byte
@@ -140,8 +141,8 @@ type lspCompareResult int
 // Constant values for lspCompareResult
 const (
 	OLDER lspCompareResult = -1
-	SAME                   = 0
-	NEWER                  = 1
+	SAME  lspCompareResult = 0
+	NEWER lspCompareResult = 1
 )
 
 func (result lspCompareResult) String() string {
@@ -171,6 +172,7 @@ func NewDB(sysid clns.SystemID, istype clns.LevelFlag, l clns.Level, areas [][]b
 		li:        l.ToIndex(),
 		areas:     areas,
 		nlpid:     nlpid,
+		testPurge: false,
 		hostname:  "",
 		circuits:  make(map[string]Circuit),
 		chgLSPC:   make(chan chgLSP, 10),
