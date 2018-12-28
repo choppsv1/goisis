@@ -117,10 +117,8 @@ func playground() {
 	arr := [3]int{0, 1, 2}
 	aslice := arr[:]
 	fmt.Printf("typeof aslice %v\n", reflect.TypeOf(aslice))
-	var arrp *[3]int
-	arrp = &arr
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&aslice))
-	arrp = (*[3]int)(unsafe.Pointer(hdr.Data))
+	arrp := (*[3]int)(unsafe.Pointer(hdr.Data))
 	fmt.Printf("arrp %v\n", arrp)
 
 	// ip, net := raw.GetInterfacePrefix("vboxnet3")

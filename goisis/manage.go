@@ -15,11 +15,11 @@ import (
 	"net/http"
 )
 
-// Generic data request for requesting data over channels
-type YangDataReq struct {
-	key    interface{}
-	result chan interface{}
-}
+// // Generic data request for requesting data over channels
+// type YangDataReq struct {
+// 	key    interface{}
+// 	result chan interface{}
+// }
 
 // IFList is a yang list of interfaces
 type IFList struct {

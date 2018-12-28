@@ -267,7 +267,7 @@ func (db *DB) InputLSP(c Circuit, payload []byte, pdutype clns.PDUType, tlvs map
 			Debug(DbgFUpd, s)
 			return ErrLSP(s)
 		}
-		val, err := btlv[0].LSPBufSizeValue()
+		val, err := btlv[0].LSPBufSizeDecode()
 		if err != nil {
 			Debug(DbgFUpd, "XXX: LSPBufSizeValue error: %s", err)
 			return err

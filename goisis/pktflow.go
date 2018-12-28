@@ -125,7 +125,7 @@ func (c *CircuitLAN) FrameToPDU(frame []byte, from syscall.Sockaddr) *RecvPDU {
 		Debug(DbgFPkt, "Dropping frame due to: %s", err)
 		return nil
 	}
-	pdu.l = l
+	pdu.li = l.ToIndex()
 
 	// Check for expected ether dst (correct mcast or us)
 	if !c.lf.IsLevelEnabled(l) {

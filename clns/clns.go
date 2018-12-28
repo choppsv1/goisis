@@ -210,7 +210,7 @@ func (nlpid NLPID) MarshalText() ([]byte, error) {
 	case NLPIDIPv6:
 		return []byte("IPv6"), nil
 	default:
-		return []byte(fmt.Sprint("%d", nlpid)), nil
+		return []byte(fmt.Sprintf("%d", nlpid)), nil
 	}
 }
 
@@ -235,7 +235,7 @@ type Level uint8
 
 const (
 	Level1 Level = 1
-	Level2       = 2
+	Level2 Level = 2
 )
 
 func (l Level) String() string {
@@ -310,7 +310,7 @@ func (lf *LevelFlag) UnmarshalText(text []byte) error {
 }
 
 // LIndex is an IS-IS level - 1
-type LIndex int
+type LIndex uint
 
 func (li LIndex) String() string {
 	return fmt.Sprintf("L%d", int(li+1))
@@ -321,6 +321,14 @@ func (li LIndex) ToLevel() Level {
 	return Level(li + 1)
 }
 
+func (li LIndex) ToFlag() LevelFlag {
+	return LevelFlag(1 << uint(li))
+}
+
+func (lf LevelFlag) IsLIndexEnabled(li LIndex) bool {
+	return (li.ToFlag() & lf) != 0
+}
+
 // PDUType represents a PDU type
 type PDUType uint8
 
@@ -329,14 +337,14 @@ type PDUType uint8
 // ---------
 const (
 	PDUTypeIIHLANL1 PDUType = 15
-	PDUTypeIIHLANL2         = 16
-	PDUTypeIIHP2P           = 17
-	PDUTypeLSPL1            = 18
-	PDUTypeLSPL2            = 20
-	PDUTypeCSNPL1           = 24
-	PDUTypeCSNPL2           = 25
-	PDUTypePSNPL1           = 26
-	PDUTypePSNPL2           = 27
+	PDUTypeIIHLANL2 PDUType = 16
+	PDUTypeIIHP2P   PDUType = 17
+	PDUTypeLSPL1    PDUType = 18
+	PDUTypeLSPL2    PDUType = 20
+	PDUTypeCSNPL1   PDUType = 24
+	PDUTypeCSNPL2   PDUType = 25
+	PDUTypePSNPL1   PDUType = 26
+	PDUTypePSNPL2   PDUType = 27
 )
 
 var PDUTypeDesc = map[PDUType]string{

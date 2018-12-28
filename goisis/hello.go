@@ -328,7 +328,7 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 
 	if a.usage.IsLevelEnabled(1) {
 		// Update Areas
-		areas, err := pdu.tlvs[tlv.TypeAreaAddrs][0].AreaAddrsValue()
+		areas, err := pdu.tlvs[tlv.TypeAreaAddrs][0].AreaAddrsDecode()
 		if err != nil {
 			Info("ERROR: processing Area Address TLV from %s: %s", a, err)
 			return true
@@ -360,7 +360,7 @@ func (a *Adj) UpdateAdj(pdu *RecvPDU) bool {
 	forloop:
 		// Walk neighbor TLVs if we see ourselves mark adjacency Up.
 		for _, ntlv := range pdu.tlvs[tlv.TypeISNeighbors] {
-			addrs, err := ntlv.ISNeighborsValue()
+			addrs, err := ntlv.ISNeighborsDecode()
 			if err != nil {
 				Info("ERROR: processing IS Neighbors TLV from %s: %v", a, err)
 				break
@@ -424,7 +424,7 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 	// ISO10589 8.4.2.1.c auth.
 
 	// For level 1 we must be in the same area.
-	if pdu.l == 1 {
+	if pdu.li == 0 {
 		// ISO10589 8.4.2.2: Receipt of level 1 IIH PDUs
 
 		// Expect 1 and only 1 Area TLV
@@ -433,7 +433,7 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 			Trap("areaMismatch: Incorrect area TLV count: %d", len(atlv))
 			return rundis
 		}
-		addrs, err := atlv[0].AreaAddrsValue()
+		addrs, err := atlv[0].AreaAddrsDecode()
 		if err != nil {
 			Trap("areaMismatch: Area TLV error: %s", err)
 			return rundis
@@ -465,7 +465,7 @@ func (link *LinkLAN) RecvHello(pdu *RecvPDU) bool {
 		a = &Adj{
 			link:  pdu.link,
 			ctype: clns.LevelFlag(pdu.payload[clns.HdrCLNSSize+clns.HdrIIHCircType] & 0x3),
-			usage: pdu.l.ToFlag(),
+			usage: pdu.li.ToFlag(),
 			sysid: clns.GetSrcID(pdu.payload),
 			snpa:  clns.HWToSNPA(pdu.src),
 		}

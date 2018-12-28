@@ -57,23 +57,17 @@ type Circuit interface {
 // Types
 // -----
 
-// PDU is a type that holds a valid IS-IS PDU.
-type PDU struct {
-	payload []byte
-	pdutype clns.PDUType
-	l       clns.Level
-	li      clns.LIndex
-	tlvs    map[tlv.Type][]tlv.Data
-}
-
 //
 // RecvPDU is a type passed by value for handling frames after some
 // validation/baking.
 type RecvPDU struct {
-	PDU
-	link Link
-	src  net.HardwareAddr
-	dst  net.HardwareAddr
+	payload []byte
+	pdutype clns.PDUType
+	li      clns.LIndex
+	tlvs    map[tlv.Type][]tlv.Data
+	link    Link
+	src     net.HardwareAddr
+	dst     net.HardwareAddr
 }
 
 //

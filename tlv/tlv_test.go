@@ -18,7 +18,7 @@ func TestNewIntfIPv4AddrsValue(t *testing.T) {
 		1, 2, 3, 4}
 	addr := net.IPv4(1, 2, 3, 4)
 
-	addrs, err := b.IntfIPv4AddrsValue()
+	addrs, err := b.IntfIPv4AddrsDecode()
 	if err != nil {
 		t.Errorf("%s", err)
 	}
@@ -42,7 +42,7 @@ func TestNewIntfIPv6AddrsValue(t *testing.T) {
 		0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0xff,
 	}
-	addrs, err := b.IntfIPv6AddrsValue()
+	addrs, err := b.IntfIPv6AddrsDecode()
 	if err != nil {
 		t.Errorf("%s", err)
 	}
@@ -63,7 +63,7 @@ func TestISNeighborsValue(t *testing.T) {
 		6,
 		1, 2, 3, 4, 5, 6}
 
-	if nbrs, err = b.ISNeighborsValue(); err != nil {
+	if nbrs, err = b.ISNeighborsDecode(); err != nil {
 		t.Errorf("Got Error: %s", err)
 	}
 

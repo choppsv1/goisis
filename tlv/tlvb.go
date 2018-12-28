@@ -67,6 +67,7 @@ const (
 	TypeIPv6IntfAddrs Type = 232 // RFC5308 (marshaled)
 	TypeIPv6Prefix    Type = 236 // RFC5308
 	TypeRouterCap     Type = 242 // RFC7981
+	TypeGenInfo       Type = 251 // RFC6823
 )
 
 // TypeNameMap returns string names for known TLV types
@@ -91,6 +92,44 @@ var TypeNameMap = map[Type]string{
 	TypeIPv6IntfAddrs: "TypeIPv6IntfAddrs",
 	TypeIPv6Prefix:    "TypeIPv6Prefix",
 	TypeRouterCap:     "TypeRouterCap",
+	TypeGenInfo:       "TypeGenInfo",
+}
+
+// TypeNoPurge key presence in map indicates not allowed in Purge LSP (RFC6233)
+// Allowed 7, 10, 13, 15, 137
+var TypeNoPurge = map[int]struct{}{
+	1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 6: {},
+	// 7: Instance ID
+	8: {}, 9: {},
+	// 10: Auth
+	11: {}, 12: {},
+	// 13: Optional Checksum
+	14: {},
+	// 15: Router-Fingerprint
+	16: {},
+	// 17-21: unassigned
+	22: {}, 23: {}, 24: {}, 25: {},
+	// 26-41: unassigned
+	42: {},
+	// 43-65: unassigned
+	66: {},
+	// 67-127: unassigned
+	128: {}, 129: {}, 130: {}, 131: {}, 132: {}, 133: {}, 134: {}, 135: {}, 136: {},
+	138: {}, 139: {}, 140: {}, 141: {}, 142: {}, 143: {}, 144: {}, 145: {}, 146: {}, 147: {}, 148: {}, 149: {}, 150: {},
+	// 151-175: unassigned
+	176: {}, 177: {},
+	// 178-210: unassigned
+	211: {},
+	// 212-221: unassigned
+	222: {}, 223: {},
+	// 224-228: unassigned
+	229: {},
+	// 230-231: unassigned
+	232: {}, 233: {}, 234: {}, 235: {}, 236: {}, 237: {}, 238: {}, 239: {}, 240: {}, 241: {}, 242: {}, 243: {},
+	// 244-250: unassigned
+	251: {},
+	// 252-65535: unassigned
+
 }
 
 func (t Type) String() string {
@@ -102,36 +141,46 @@ func (t Type) String() string {
 }
 
 // Type get type of byte based TLV
-func (b Data) Type() (int, error) {
-	if len(b) < 2 {
-		return -1, fmt.Errorf("Can't get type of %d len TLV", len(b))
+func (tlv Data) Type() (int, error) {
+	if len(tlv) < 2 {
+		return -1, fmt.Errorf("Can't get type of %d len TLV", len(tlv))
 	}
-	return int(b[0]), nil
+	return int(tlv[0]), nil
 }
 
 // Length get length of byte based TLV
-func (b Data) Length() (int, error) {
-	if len(b) < 2 {
-		return -1, fmt.Errorf("Can't get length of %d len TLV", len(b))
+func (tlv Data) Length() (int, error) {
+	if len(tlv) < 2 {
+		return -1, fmt.Errorf("Can't get length of %d len TLV", len(tlv))
 	}
-	if len(b[2:]) < int(b[1]) {
+	if len(tlv[2:]) < int(tlv[1]) {
 		return -1, fmt.Errorf("Slice length %d < encoded TLV length %d",
-			len(b[2:])-2,
-			int(b[1]))
+			len(tlv[2:])-2,
+			int(tlv[1]))
 	}
-	return int(b[1]), nil
+	return int(tlv[1]), nil
 }
 
 // Value get value of byte based TLV
-func (b Data) Value() ([]byte, error) {
-	if _, err := b.Length(); err != nil {
+func (tlv Data) Value() ([]byte, error) {
+	if _, err := tlv.Length(); err != nil {
 		return nil, err
 	}
-	return b[2:], nil
+	return tlv[2:], nil
 }
 
-func (b Data) newFixedValues(alen int, atyp interface{}) error {
-	_, l, v, err := GetTLV(b)
+// Authentication types
+type AuthType uint8
+
+const (
+	AuthPlain   AuthType = 2
+	AuthCrypto  AuthType = 3
+	AuthMD5     AuthType = 54
+	AuthPrivate AuthType = 255
+)
+
+func (tlv Data) newFixedValues(alen int, atyp interface{}) error {
+	_, l, v, err := GetTLV(tlv)
 	if err != nil {
 		return err
 	}
@@ -175,10 +224,10 @@ type Map map[Type][]Data
 // ParseTLV returns a map of slices of TLVs of by TLV Type. This validates the
 // TLV lengths at the topmost level; however, it does not validate that the
 // length is correct for the TLV type or that the data is correct.
-func (b Data) ParseTLV() (Map, error) {
-	tlv := make(Map)
+func (tlv Data) ParseTLV() (Map, error) {
+	tlvmap := make(Map)
 
-	tlvp := b
+	tlvp := tlv
 	for len(tlvp) > 1 {
 		tlvtype := Type(tlvp[0])
 		tlvlen := int(tlvp[1])
@@ -186,28 +235,28 @@ func (b Data) ParseTLV() (Map, error) {
 		if tlvlen+2 > len(tlvp) {
 			return nil, ErrTLVSpaceCorrupt(fmt.Sprintf("%d exceeds %d", tlvlen+2, len(tlvp)))
 		}
-		tlv[tlvtype] = append(tlv[tlvtype], tlvp[:tlvlen+2])
+		tlvmap[tlvtype] = append(tlvmap[tlvtype], tlvp[:tlvlen+2])
 		tlvp = tlvp[tlvlen+2:]
 	}
-	return tlv, nil
+	return tlvmap, nil
 }
 
 // IntfIPv4AddrsValue returns slice of IPv4 interface addresses.
-func (b Data) IntfIPv4AddrsValue() ([]net.IP, error) {
+func (tlv Data) IntfIPv4AddrsDecode() ([]net.IP, error) {
 	addrs := make([]net.IP, 0, 4)
-	return addrs, b.newFixedValues(4, &addrs)
+	return addrs, tlv.newFixedValues(4, &addrs)
 }
 
 // IntfIPv6AddrsValue returns slice of IPv6 interface addresses.
-func (b Data) IntfIPv6AddrsValue() ([]net.IP, error) {
+func (tlv Data) IntfIPv6AddrsDecode() ([]net.IP, error) {
 	addrs := make([]net.IP, 0, 4)
-	return addrs, b.newFixedValues(16, &addrs)
+	return addrs, tlv.newFixedValues(16, &addrs)
 }
 
 // ISNeighborsValue return array of neighbor system IDs.
-func (b Data) ISNeighborsValue() ([]SystemID, error) {
+func (tlv Data) ISNeighborsDecode() ([]SystemID, error) {
 	ids := make([]SystemID, 0, 2)
-	return ids, b.newFixedValues(6, &ids)
+	return ids, tlv.newFixedValues(6, &ids)
 }
 
 type InstanceIDValue struct {
@@ -215,10 +264,10 @@ type InstanceIDValue struct {
 	Itid []uint16 `json:"itid"`
 }
 
-func (b Data) decodeInstanceIDValues() (InstanceIDValue, error) {
+func (tlv Data) InstanceIDDecode() (InstanceIDValue, error) {
 	rv := InstanceIDValue{}
 
-	t, l, v, err := GetTLV(b)
+	t, l, v, err := GetTLV(tlv)
 	if err != nil {
 		return rv, err
 	}
@@ -239,13 +288,13 @@ func (b Data) decodeInstanceIDValues() (InstanceIDValue, error) {
 }
 
 // AreaAddrsValue returns an array of address found in the TLV.
-func (b Data) AreaAddrsValue() ([]clns.Area, error) {
-	t, _, v, err := GetTLV(b)
+func (tlv Data) AreaAddrsDecode() ([]clns.Area, error) {
+	t, _, v, err := GetTLV(tlv)
 	if err != nil {
 		return nil, err
 	}
 	if t != int(TypeAreaAddrs) {
-		return nil, fmt.Errorf("Incorrect TLV type %s expecting %s", Type(b[0]), TypeAreaAddrs)
+		return nil, fmt.Errorf("Incorrect TLV type %s expecting %s", Type(t), TypeAreaAddrs)
 	}
 
 	var addrs []clns.Area
@@ -263,8 +312,8 @@ func (b Data) AreaAddrsValue() ([]clns.Area, error) {
 	return addrs, nil
 }
 
-func (b Data) Hostname() (string, error) {
-	_, _, v, err := GetTLV(b)
+func (tlv Data) Hostname() (string, error) {
+	_, _, v, err := GetTLV(tlv)
 	if err != nil {
 		return "", err
 	}
@@ -273,8 +322,8 @@ func (b Data) Hostname() (string, error) {
 }
 
 // RouterIDValue returns the Router ID found in the TLV.
-func (b Data) RouterIDValue() (net.IP, error) {
-	_, l, v, err := GetTLV(b)
+func (tlv Data) RouterIDDecode() (net.IP, error) {
+	_, l, v, err := GetTLV(tlv)
 	if err != nil {
 		return nil, err
 	}
@@ -285,8 +334,8 @@ func (b Data) RouterIDValue() (net.IP, error) {
 }
 
 // NLPIDValues returns a slice of NLPID values.
-func (b Data) NLPIDValues() ([]clns.NLPID, error) {
-	_, l, v, err := GetTLV(b)
+func (tlv Data) NLPIDDecode() ([]clns.NLPID, error) {
+	_, l, v, err := GetTLV(tlv)
 	if err != nil {
 		return nil, err
 	}
@@ -298,8 +347,8 @@ func (b Data) NLPIDValues() ([]clns.NLPID, error) {
 }
 
 // LSPBufSizeValue returns the value found in the TLV.
-func (b Data) LSPBufSizeValue() (uint16, error) {
-	_, l, v, err := GetTLV(b)
+func (tlv Data) LSPBufSizeDecode() (uint16, error) {
+	_, l, v, err := GetTLV(tlv)
 	if err != nil {
 		return 0, err
 	}
@@ -310,8 +359,8 @@ func (b Data) LSPBufSizeValue() (uint16, error) {
 }
 
 // Return the systemid count returned in the input args.
-func (b Data) PurgeValues() ([]clns.SystemID, error) {
-	_, l, v, err := GetTLV(b)
+func (tlv Data) PurgeDecode() ([]clns.SystemID, error) {
+	_, l, v, err := GetTLV(tlv)
 	if err != nil {
 		return nil, err
 	}
@@ -380,14 +429,14 @@ func (tlvs Map) SNPEntryValues() ([][]byte, error) {
 	return entries, nil
 }
 
-type SNPEntryDecode struct {
+type SNPEntry struct {
 	Lifetime uint16
 	Lspid    clns.LSPID
 	SeqNo    uint32
 	Cksum    uint16
 }
 
-func (tlv Data) decodeSNPEntryValues() ([]SNPEntryDecode, error) {
+func (tlv Data) SNPEntryDecode() ([]SNPEntry, error) {
 	_, l, v, err := GetTLV(tlv)
 	if err != nil {
 		return nil, err
@@ -397,7 +446,7 @@ func (tlv Data) decodeSNPEntryValues() ([]SNPEntryDecode, error) {
 			fmt.Sprintf("SNP Entries TLV not multiple of %d", SNPEntSize))
 	}
 	count := l / SNPEntSize
-	rv := make([]SNPEntryDecode, count)
+	rv := make([]SNPEntry, count)
 	for i := 0; i < count; i++ {
 		rv[i].Lifetime = binary.BigEndian.Uint16(v[SNPEntLifetime:])
 		copy(rv[i].Lspid[:], v[SNPEntLSPID:])
@@ -408,13 +457,13 @@ func (tlv Data) decodeSNPEntryValues() ([]SNPEntryDecode, error) {
 	return rv, nil
 }
 
-type ISExtReachDecode struct {
+type ISExtReach struct {
 	Metric uint32      `json:"metric"`
 	Nodeid clns.NodeID `json:"nodeid"`
 	Subtlv Data        `json:"subtlv,omitempty"`
 }
 
-func (tlv Data) decodeISExtReachValues() ([]ISExtReachDecode, error) {
+func (tlv Data) ISExtReachDecode() ([]ISExtReach, error) {
 	t, l, v, err := GetTLV(tlv)
 	if err != nil {
 		return nil, err
@@ -438,7 +487,7 @@ func (tlv Data) decodeISExtReachValues() ([]ISExtReachDecode, error) {
 	}
 	// Extract the data
 	_, _, v, _ = GetTLV(tlv)
-	rv := make([]ISExtReachDecode, count)
+	rv := make([]ISExtReach, count)
 	for i := 0; i < count; i++ {
 		rv[i].Metric = uint32(v[7])<<16 + uint32(v[8])<<8 + uint32(v[9])
 		copy(rv[i].Nodeid[:], v)
@@ -453,6 +502,16 @@ func (tlv Data) decodeISExtReachValues() ([]ISExtReachDecode, error) {
 	return rv, nil
 }
 
+// Constants for the Extended IPv4 and IPv6 Reachability encoding.
+const (
+	ExtIPFlagDown       = byte(1 << 7)
+	ExtIPv4FlagSubTLV   = byte(1 << 6)
+	ExtIPv4FlagLenMask  = byte(0x3f)
+	ExtIPv6FlagExternal = byte(1 << 6)
+	ExtIPv6FlagSubTLV   = byte(1 << 5)
+	ExtIPMaxMetric      = uint32(0xFE000000)
+)
+
 // IPPrefix is the same as net.IPNet but we can then add methods like a JSON
 // marshal function.
 type IPPrefix net.IPNet
@@ -462,51 +521,60 @@ func (p IPPrefix) MarshalText() ([]byte, error) {
 	return []byte((*net.IPNet)(&p).String()), nil
 }
 
-type IPPrefixDecode struct {
+type IPPrefixCommon struct {
 	Metric uint32   `json:"metric"`
 	Prefix IPPrefix `json:"prefix"`
 	Subtlv Data     `json:"subtlv,omitempty"`
 	Updown bool     `json:"updown"`
 }
 
-type IPv4PrefixDecode struct {
-	IPPrefixDecode
+type ExtIPv4Prefix struct {
+	IPPrefixCommon
 	ipbytes [4]byte
 }
 
-type IPv6PrefixDecode struct {
-	IPPrefixDecode
+type IPv6Prefix struct {
+	IPPrefixCommon
 	External bool `json:"external"`
 	ipbytes  [16]byte
 }
 
-func (tlv Data) decodeIPv4PrefixValues() ([]IPv4PrefixDecode, error) {
+func (tlv Data) IPPrefixCount() (int, error) {
 	t, l, v, err := GetTLV(tlv)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
+	ipv4 := Type(t) == TypeExtIPv4Prefix
 	count := 0
 	for len(v) > 0 {
 		if l < 5 {
-			return nil, fmt.Errorf("short length %d for TLV %s", l, Type(t))
+			return 0, fmt.Errorf("short length %d for TLV %s", l, Type(t))
 		}
-		// updown := (0x80 & v[4]) == 1
-		gotsub := (0x40 & v[4]) == 1
-		pfxlen := int(0x3f & v[4])
+		var gotsub bool
+		var pfxlen int
+		nlen := 5
+		if ipv4 {
+			gotsub = (ExtIPv4FlagSubTLV & v[4]) == 1
+			pfxlen = int(ExtIPv4FlagLenMask & v[4])
+		} else {
+			gotsub = (ExtIPv6FlagSubTLV & v[4]) == 1
+			pfxlen = int(v[5])
+			nlen++
+		}
 		pfxblen := (pfxlen + 7) / 8
-		nlen := 5 + pfxblen
+		nlen += pfxblen
 		if gotsub {
 			nlen += 1
 		}
 		if nlen > len(v) {
-			return nil, fmt.Errorf("short length %d at least %d reqd for TLV %s", len(v), nlen, Type(t))
+			return 0, fmt.Errorf("short length %d at least %d reqd for TLV %s", len(v), nlen, Type(t))
 		}
 		if gotsub {
 			sublen := int(v[nlen-1])
 			if sublen != 0 {
 				sub := v[nlen:]
 				if sublen > len(sub) {
-					return nil, fmt.Errorf("subtlv length %d > remaining len %d", len(sub), sublen)
+					return 0, fmt.Errorf("subtlv length %d > remaining len %d", len(sub), sublen)
 				}
 			}
 			nlen += sublen
@@ -516,17 +584,25 @@ func (tlv Data) decodeIPv4PrefixValues() ([]IPv4PrefixDecode, error) {
 		count++
 	}
 
-	// Extract the data
-	_, _, v, _ = GetTLV(tlv)
-	rv := make([]IPv4PrefixDecode, count)
+	return count, nil
+}
+
+func (tlv Data) IPv4PrefixDecode() ([]ExtIPv4Prefix, error) {
+	count, err := tlv.IPPrefixCount()
+	if err != nil {
+		return nil, err
+	}
+
+	_, _, v, _ := GetTLV(tlv)
+	rv := make([]ExtIPv4Prefix, count)
 	for i := 0; i < count; i++ {
 		rv[i].Metric = binary.BigEndian.Uint32(v)
-		gotsub := (0x40 & v[4]) == 1
-		pfxlen := int(0x3f & v[4])
+		gotsub := (ExtIPv4FlagSubTLV & v[4]) == 1
+		pfxlen := int(ExtIPv4FlagLenMask & v[4])
 		pfxblen := (pfxlen + 7) / 8
 		nlen := 5 + pfxblen
 
-		rv[i].Updown = (0x80 & v[4]) == 1
+		rv[i].Updown = (ExtIPFlagDown & v[4]) == 1
 		rv[i].Prefix.IP = rv[i].ipbytes[:]
 		rv[i].Prefix.Mask = net.CIDRMask(pfxlen, 32)
 		copy(rv[i].Prefix.IP, v[5:])
@@ -544,53 +620,23 @@ func (tlv Data) decodeIPv4PrefixValues() ([]IPv4PrefixDecode, error) {
 	return rv, nil
 }
 
-func (tlv Data) decodeIPv6PrefixValues() ([]IPv6PrefixDecode, error) {
-	t, l, v, err := GetTLV(tlv)
+func (tlv Data) IPv6PrefixDecode() ([]IPv6Prefix, error) {
+	count, err := tlv.IPPrefixCount()
 	if err != nil {
 		return nil, err
 	}
-	count := 0
-	for len(v) > 0 {
-		if l < 5 {
-			return nil, fmt.Errorf("short length %d for TLV %s", l, Type(t))
-		}
-		gotsub := (0x20 & v[4]) == 1
-		pfxlen := int(v[5])
-		pfxblen := (pfxlen + 7) / 8
-		nlen := 6 + pfxblen
-		if gotsub {
-			nlen += 1
-		}
-		if nlen > len(v) {
-			return nil, fmt.Errorf("short length %d at least %d reqd for TLV %s", len(v), nlen, Type(t))
-		}
-		if gotsub {
-			sublen := int(v[nlen-1])
-			if sublen != 0 {
-				sub := v[nlen:]
-				if sublen > len(sub) {
-					return nil, fmt.Errorf("subtlv length %d > remaining len %d", len(sub), sublen)
-				}
-			}
-			nlen += sublen
-		}
-		v = v[nlen:]
-		l = l - nlen
-		count++
-	}
 
-	// Extract the data
-	_, _, v, _ = GetTLV(tlv)
-	rv := make([]IPv6PrefixDecode, count)
+	_, _, v, _ := GetTLV(tlv)
+	rv := make([]IPv6Prefix, count)
 	for i := 0; i < count; i++ {
 		rv[i].Metric = binary.BigEndian.Uint32(v)
-		gotsub := (0x20 & v[4]) == 1
+		gotsub := (ExtIPv6FlagSubTLV & v[4]) == 1
 		pfxlen := int(v[5])
 		pfxblen := (pfxlen + 7) / 8
 		nlen := 6 + pfxblen
 
-		rv[i].Updown = (0x80 & v[4]) == 1
-		rv[i].External = (0x40 & v[4]) == 1
+		rv[i].Updown = (ExtIPFlagDown & v[4]) == 1
+		rv[i].External = (ExtIPv6FlagExternal & v[4]) == 1
 		rv[i].Prefix.IP = rv[i].ipbytes[:]
 		rv[i].Prefix.Mask = net.CIDRMask(pfxlen, 128)
 		copy(rv[i].Prefix.IP, v[5:])
@@ -661,34 +707,34 @@ func (tlvs Map) MarshalJSON() ([]byte, error) {
 
 			switch k {
 			case TypeAreaAddrs:
-				value, err = tlv.AreaAddrsValue()
+				value, err = tlv.AreaAddrsDecode()
 			case TypeIPv4IntfAddrs:
-				value, err = tlv.IntfIPv4AddrsValue()
+				value, err = tlv.IntfIPv4AddrsDecode()
 			case TypeIPv6IntfAddrs:
-				value, err = tlv.IntfIPv6AddrsValue()
+				value, err = tlv.IntfIPv6AddrsDecode()
 			case TypeLspBufSize:
-				value, err = tlv.LSPBufSizeValue()
+				value, err = tlv.LSPBufSizeDecode()
 			case TypePurge:
-				value, err = tlv.PurgeValues()
+				value, err = tlv.PurgeDecode()
 			case TypeNLPID:
-				value, err = tlv.NLPIDValues()
+				value, err = tlv.NLPIDDecode()
 			case TypeISNeighbors:
-				value, err = tlv.ISNeighborsValue()
+				value, err = tlv.ISNeighborsDecode()
 			case TypeHostname:
 				value, err = tlv.Hostname()
 			case TypeRouterID:
-				value, err = tlv.RouterIDValue()
+				value, err = tlv.RouterIDDecode()
 			case TypeExtIsReach:
-				value, err = tlv.decodeISExtReachValues()
+				value, err = tlv.ISExtReachDecode()
 			case TypeExtIPv4Prefix:
-				value, err = tlv.decodeIPv4PrefixValues()
+				value, err = tlv.IPv4PrefixDecode()
 			case TypeIPv6Prefix:
-				value, err = tlv.decodeIPv6PrefixValues()
+				value, err = tlv.IPv6PrefixDecode()
 			case TypeInstanceID:
-				value, err = tlv.decodeInstanceIDValues()
+				value, err = tlv.InstanceIDDecode()
 			// Non-LSP
 			case TypeSNPEntries:
-				value, err = tlv.decodeSNPEntryValues()
+				value, err = tlv.SNPEntryDecode()
 			case TypePadding:
 				value = "<padding>"
 			// case TypeAuth:
@@ -1145,15 +1191,6 @@ func (bt *BufferTrack) AddExtISReach(c <-chan interface{}, count int) error {
 // --------------------------
 // Extended IPv4 Reachability
 // --------------------------
-
-// Constants for the Extended IPv4 Reachability encoding.
-const (
-	ExtIPFlagDown       = byte(1 << 7)
-	ExtIPv4FlagSubTLV   = byte(1 << 6)
-	ExtIPv6FlagExternal = byte(1 << 6)
-	ExtIPv6FlagSubTLV   = byte(1 << 5)
-	ExtIPMaxMetric      = uint32(0xFE000000)
-)
 
 // IPInfo is received on a channel to describe adjacencies.
 type IPInfo struct {
