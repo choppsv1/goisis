@@ -16,7 +16,7 @@ import (
 
 type ownLSP struct {
 	Pnid      uint8
-	li        clns.LIndex
+	li        clns.Lindex
 	db        *DB
 	c         Circuit
 	segments  map[uint8][]byte
