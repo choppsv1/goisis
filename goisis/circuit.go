@@ -50,6 +50,7 @@ type Circuit interface {
 	OpenPDU(clns.PDUType, net.HardwareAddr) (ether.Frame, []byte, []byte, []byte)
 	RecvHello(pdu *RecvPDU)
 	Send([]byte, clns.Lindex)
+	SendAck([]byte, clns.Lindex)
 	YangData() (*YangInterface, error)
 }
 
@@ -342,6 +343,11 @@ func (c *CircuitLAN) Send(pdu []byte, li clns.Lindex) {
 	etherp, payload := c.OpenFrame(clns.AllLxIS[li])
 	copy(payload, pdu)
 	c.outpkt <- CloseFrame(etherp, len(pdu))
+}
+
+func (c *CircuitLAN) SendAck(pdu []byte, li clns.Lindex) {
+	// We ack on LAN by sending the LSP.
+	c.Send(pdu, li)
 }
 
 // Adjacencies arranges for tlvb.AdjInfo to be sent on the provided

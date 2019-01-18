@@ -42,6 +42,7 @@ type Circuit interface {
 	Name() string
 	MTU() uint
 	Send([]byte, clns.Lindex)
+	SendAck([]byte, clns.Lindex)
 }
 
 // =====
@@ -125,15 +126,18 @@ type inputGetSNP struct {
 
 // lspSegment represents an LSP segment from an IS.
 type lspSegment struct {
-	payload  []byte
-	hdr      []byte
-	tlvs     map[tlv.Type][]tlv.Data
-	lspid    clns.LSPID
+	// immutable
+	payload []byte
+	hdr     []byte
+	tlvs    map[tlv.Type][]tlv.Data
+	lspid   clns.LSPID
+	// XXX isAck    bool
+	isOurs bool
+
+	// mutable
 	life     *xtime.HoldTimer
 	zeroLife *xtime.HoldTimer
 	refresh  *time.Timer
-	// XXX isAck    bool
-	isOurs bool
 }
 
 type lspCompareResult int

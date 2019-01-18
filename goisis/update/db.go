@@ -170,12 +170,6 @@ func (db *DB) updateLSPSegment(lsp *lspSegment, payload []byte, tlvs tlv.Map) {
 	Debug(DbgFUpd, "%s: Updated %s", db, lsp)
 }
 
-func copyTLV(dst, src []byte) int {
-	l := len(src)
-	copy(dst, src)
-	return l
-}
-
 // initiatePurgeLSP initiates a purge of an LSPSegment due to lifetime running
 // to zero.
 func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
@@ -220,44 +214,52 @@ func (db *DB) initiatePurgeLSP(lsp *lspSegment, fromTimer bool) {
 	db.setAllFlag(SRM, lsp.lspid, nil)
 
 	// b) Retain only LSP header + purge TLVs
-	var savespace [1024]byte
-	tlvp := tlv.Data(savespace[:])
 
-	// Save space for purge TLV
-	tlvp = tlvp[2+clns.SysIDLen:]
-
-	// Save other purge OK TLVs
+	// Get new payload space, so we do not modified possibly shared old
+	// payload space.
+	purgelen := 2 + clns.SysIDLen
 	if lsp.tlvs[tlv.TypeHostname] != nil {
-		l := copyTLV(tlvp, lsp.tlvs[tlv.TypeHostname][0])
+		purgelen += int(lsp.tlvs[tlv.TypeHostname][0][1])
+	}
+	if lsp.tlvs[tlv.TypeInstanceID] != nil {
+		purgelen += int(lsp.tlvs[tlv.TypeInstanceID][0][1])
+	}
+	if lsp.tlvs[tlv.TypeFingerprint] != nil {
+		purgelen += int(lsp.tlvs[tlv.TypeFingerprint][0][1])
+	}
+	npayload := make([]byte, len(lsp.hdr)+purgelen)
+	hdrlen := copy(npayload, lsp.hdr)
+	tlvp := tlv.Data(npayload[hdrlen:])
+
+	// Add Purge OK TLVs
+	tlvp[0] = byte(tlv.TypePurge)
+	tlvp[1] = byte(clns.SysIDLen)
+	copy(tlvp[2:], db.sysid[:])
+	tlvp = tlvp[2+clns.SysIDLen:]
+	if lsp.tlvs[tlv.TypeHostname] != nil {
+		l := copy(tlvp, lsp.tlvs[tlv.TypeHostname][0])
 		tlvp = tlvp[l:]
 	}
 	if lsp.tlvs[tlv.TypeInstanceID] != nil {
-		l := copyTLV(tlvp, lsp.tlvs[tlv.TypeInstanceID][0])
+		l := copy(tlvp, lsp.tlvs[tlv.TypeInstanceID][0])
 		tlvp = tlvp[l:]
 	}
 	if lsp.tlvs[tlv.TypeFingerprint] != nil {
-		l := copyTLV(tlvp, lsp.tlvs[tlv.TypeFingerprint][0])
-		tlvp = tlvp[l:]
+		copy(tlvp, lsp.tlvs[tlv.TypeFingerprint][0])
 	}
-	// Purge LSP
-	purgetlv := savespace[:]
-	purgetlv[0] = byte(tlv.TypePurge)
-	purgetlv[1] = byte(clns.SysIDLen)
-	copy(purgetlv[2:], db.sysid[:])
 
 	// Shrink LSP Payload
-	purgelen := tlv.GetOffset(savespace[:], tlvp)
-	pdulen := clns.HdrCLNSSize + clns.HdrLSPSize + purgelen
-	Debug(DbgFUpd, "Shrinking lsp.payload %d:%d to %d", len(lsp.payload), cap(lsp.payload), pdulen)
-
-	lsp.payload = lsp.payload[:pdulen]
-	Debug(DbgFUpd, "Shrunk lsp.payload to %d:%d", len(lsp.payload), cap(lsp.payload))
+	pdulen := len(npayload)
+	Debug(DbgFUpd, "Shrinking lsp.payload %d of %d to %d of %d",
+		len(lsp.payload),
+		cap(lsp.payload),
+		pdulen, cap(npayload))
+	lsp.payload = npayload
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPCksum:], 0)
 	pkt.PutUInt16(lsp.hdr[clns.HdrLSPPDULen:], uint16(pdulen))
 
-	// Add back in the purge TLVs
-	tlvp = lsp.payload[pdulen-purgelen:]
-	copy(tlvp, savespace[:purgelen])
+	// Reinit the tlv map with new payload backing.
+	tlvp = lsp.payload[hdrlen:]
 	lsp.tlvs, _ = tlvp.ParseTLV()
 
 	// Update the CSNP cache
@@ -419,9 +421,9 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs tlv.Map) {
 		}
 	}
 
-	// [ also: ISO 10589 17.3.16.4: a, b ]
+	// [ also: ISO 10589 7.3.16.4: a, b ]
 	// e1) Newer - update db, flood and acknowledge
-	//     [ also: ISO 10589 17.3.16.4: b.1 ]
+	//     [ also: ISO 10589 7.3.16.4: b.1 ]
 	if result == NEWER && !fromUs {
 		if lsp != nil && lsp.life != nil {
 			if !lsp.life.Stop() {
@@ -448,15 +450,18 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs tlv.Map) {
 			}
 			db.updateLSPSegment(lsp, payload, tlvs)
 		} else {
+			if nlifetime == 0 {
+				// 7.3.16.4: a
+				// Send ack on circuit do not retain
+				if c != nil {
+					c.SendAck(payload, db.li)
+				}
+				return
+			}
 			if c != nil {
 				Debug(DbgFUpd, "%s: Added LSP from %s", db, c)
 			} else {
 				Debug(DbgFUpd, "%s: Added Own LSP", db)
-			}
-			if nlifetime == 0 {
-				// 17.3.16.4: a
-				// XXX send ack on circuit do not retain
-				return
 			}
 			lsp = db.newLSPSegment(payload, tlvs)
 		}
@@ -483,14 +488,14 @@ func (db *DB) receiveLSP(c Circuit, payload []byte, tlvs tlv.Map) {
 		}
 	} else if result == SAME {
 		// e2) Same - Stop sending and Acknowledge
-		//     [ also: ISO 10589 17.3.16.4: b.2 ]
+		//     [ also: ISO 10589 7.3.16.4: b.2 ]
 		db.clearAllFlag(SRM, lsp.lspid, nil)
 		if c != nil && c.IsP2P() {
 			db.setFlag(SSN, lsp.lspid, c)
 		}
 	} else {
 		// e3) Older - Send and don't acknowledge
-		//     [ also: ISO 10589 17.3.16.4: b.3 ]
+		//     [ also: ISO 10589 7.3.16.4: b.3 ]
 		db.setFlag(SRM, lsp.lspid, c)
 		db.clearFlag(SSN, lsp.lspid, c)
 		db.clearAllFlag(SRM, lsp.lspid, nil)
